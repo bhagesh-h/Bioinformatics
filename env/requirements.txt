@@ -1,0 +1,32 @@
+# ============================================================================
+# Python environment for "Statistics for Bioinformatics"
+# ----------------------------------------------------------------------------
+# Pinned to lower bounds that are known to contain every API used in the
+# course scripts. Build the image with:
+#     docker build -f docker/Dockerfile.python -t learn-stats-py:1.0 .
+# Nothing is installed on the host; every package lives inside the container.
+# ============================================================================
+
+# --- Numerical / array core -------------------------------------------------
+numpy>=1.26,<3            # n-dimensional arrays, linear algebra, RNG (Generator API)
+scipy>=1.11,<2            # distributions, optimisation, hypothesis tests, linalg
+
+# --- Data handling ----------------------------------------------------------
+pandas>=2.1,<3            # DataFrame / Series, groupby, tidy reshaping
+
+# --- Plotting ---------------------------------------------------------------
+matplotlib>=3.8,<4        # all figures in the course
+seaborn>=0.13,<1          # statistical graphics convenience layer
+
+# --- Statistical modelling --------------------------------------------------
+statsmodels>=0.14,<1      # OLS/GLM/GEE/MixedLM, multipletests, power, survival
+scikit-learn>=1.3,<2      # CV, pipelines, penalised regression, metrics, PCA
+lifelines>=0.27,<1        # Kaplan-Meier, log-rank, Cox PH with clean formula API
+
+# --- Literate programming ---------------------------------------------------
+jupytext>=1.16,<2         # .py (percent format) <-> .ipynb round trip
+nbformat>=5.9,<6          # notebook object model
+nbclient>=0.9,<1          # headless notebook execution (used by the test runner)
+nbconvert>=7.10,<8        # notebook -> HTML export
+ipykernel>=6.25,<7        # the kernel the notebooks execute against
+jupyterlab>=4.0,<5        # interactive front-end (optional for batch runs)

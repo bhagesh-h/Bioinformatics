@@ -1,0 +1,256 @@
+---
+title: "Module 17 - Principal component analysis"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topic 17, equations (17.1)-(17.6)
+
+## What you will learn
+
+1. PCA is one eigenproblem (17.1), computed via SVD (17.2)-(17.3).
+2. Centering is mandatory; **scaling is a decision** (17.4).
+3. How many components: parallel analysis and Marchenko-Pastur (17.5).
+4. Sign and rotation indeterminacy.
+5. **PC x metadata association (17.6)** -- the key bioinformatics output.
+6. Over-reading separation, and double dipping.
+
+```{r setup, message = FALSE}
+MODULE_NAME <- "17_pca"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## 1. PCA from scratch: eigen and SVD agree, eq. (17.1)-(17.3)
+
+```{r pca-scratch}
+header("1. Eigen-decomposition == SVD (17.1)-(17.3)")
+pca_manual <- function(X, scale. = FALSE) {
+  Xc <- scale(X, center = TRUE, scale = scale.)      # centering is MANDATORY
+  n <- nrow(Xc)
+  sv <- svd(Xc)
+  list(scores = sv$u %*% diag(sv$d), loadings = sv$v,
+       eigenvalues = sv$d^2 / (n - 1), pve = sv$d^2 / sum(sv$d^2), centered = Xc)
+}
+set.seed(1701)
+n_s <- 60; p_f <- 300
+Z <- matrix(rnorm(n_s * 2), n_s)
+X <- Z %*% matrix(rnorm(2 * p_f), 2) + matrix(rnorm(n_s * p_f, 0, 0.8), n_s)
+res <- pca_manual(X)
+S <- cov(res$centered)
+ev_eig <- sort(eigen(S, only.values = TRUE)$values, TRUE)[1:6]
+cat(sprintf("  eigenvalues from covariance eigen: %s\n",
+            paste(sprintf("%.4f", ev_eig), collapse = " ")))
+cat(sprintf("  eigenvalues from SVD, d^2/(n-1)  : %s\n",
+            paste(sprintf("%.4f", res$eigenvalues[1:6]), collapse = " ")))
+cat(sprintf("  max |difference| = %.2e\n", max(abs(ev_eig - res$eigenvalues[1:6]))))
+pr <- prcomp(X, center = TRUE, scale. = FALSE)
+cat(sprintf("\n  prcomp() PVE : %s\n",
+            paste(sprintf("%.4f", (pr$sdev^2/sum(pr$sdev^2))[1:6]), collapse = " ")))
+cat(sprintf("  manual   PVE : %s\n",
+            paste(sprintf("%.4f", res$pve[1:6]), collapse = " ")))
+recon <- res$scores[, 1:2] %*% t(res$loadings[, 1:2])
+cat(sprintf("\n  rank-2 reconstruction captures %.1f%% of the total variance\n",
+            100 * (1 - sum((res$centered - recon)^2) / sum(res$centered^2))))
+```
+
+## 2. Centering is mandatory; scaling is a decision, eq. (17.4)
+
+```{r centering-scaling}
+header("2. Centering and scaling (17.4)")
+X_unc <- X + 50
+sv_unc <- svd(X_unc)
+cat(sprintf("  WITHOUT centering, PC1 explains %.1f%% of variance\n",
+            100 * sv_unc$d[1]^2 / sum(sv_unc$d^2)))
+cat(sprintf("  |cor(PC1 loading, mean vector)| = %.4f\n",
+            abs(cor(sv_unc$v[, 1], colMeans(X_unc)))))
+cat("  Without centering, PC1 just points at the mean. ALWAYS centre.\n")
+cat("  (prcomp() centres by default; princomp() also does. Never turn it off.)\n")
+set.seed(1702)
+clin <- cbind(HbA1c = rnorm(100, 5.5, 0.8), chol = rnorm(100, 200, 40),
+              wbc = rnorm(100, 7000, 2500))
+cat("\n  Scaling matters when features are on different scales:\n")
+for (sc in c(FALSE, TRUE)) {
+  r <- pca_manual(clin, scale. = sc)
+  cat(sprintf("    scale=%-5s: PVE1=%.3f, |PC1 loadings| = %s\n", sc, r$pve[1],
+              paste(sprintf("%.3f", abs(r$loadings[, 1])), collapse = " ")))
+}
+cat("  Unscaled, PC1 is entirely the variable with the largest UNITS (wbc),\n")
+cat("  an artefact of measurement units, not biology.\n")
+cat("\n  RULE: scale when units differ (clinical panels); do NOT scale when\n")
+cat("  features share units and the variance differences ARE the biology\n")
+cat("  (log-expression, M-values, arcsinh cytometry).\n")
+```
+
+## 3. How many components? eq. (17.5)
+
+```{r how-many}
+header("3. Selecting components: parallel analysis and Marchenko-Pastur (17.5)")
+parallel_analysis <- function(X, n_perm = 60, scale. = TRUE) {
+  obs <- pca_manual(X, scale.)$eigenvalues
+  null <- replicate(n_perm, {
+    Xp <- apply(X, 2, sample)      # permute each feature INDEPENDENTLY
+    pca_manual(Xp, scale.)$eigenvalues[seq_along(obs)]
+  })
+  list(obs = obs, thresh = apply(null, 1, quantile, 0.95))
+}
+set.seed(1703)
+pa <- parallel_analysis(X, n_perm = 40)
+gamma <- p_f / n_s
+mp_edge <- (1 + sqrt(gamma))^2                                  # eq. (17.5)
+cat(sprintf("  data: n=%d, p=%d, gamma = p/n = %.2f\n", n_s, p_f, gamma))
+cat(sprintf("  Marchenko-Pastur upper edge (1+sqrt(gamma))^2 = %.3f\n\n", mp_edge))
+cat(sprintf("  %4s%13s%23s%8s\n", "PC", "eigenvalue", "95th pct of permuted", "keep?"))
+for (j in 1:6)
+  cat(sprintf("  %4d%13.3f%23.3f%8s\n", j, pa$obs[j], pa$thresh[j],
+              ifelse(pa$obs[j] > pa$thresh[j], "yes", "no")))
+cat(sprintf("\n  parallel analysis keeps %d component(s); the data were generated\n",
+            sum(pa$obs > pa$thresh)))
+cat("  from 2 latent factors.\n")
+cat("\n  How large do PURE NOISE eigenvalues get?\n")
+cat(sprintf("  %6s%7s%8s%14s%10s\n", "n", "p", "gamma", "observed max", "MP edge"))
+for (cfg in list(c(50,50), c(50,500), c(50,2000))) {
+  set.seed(cfg[1]*cfg[2])
+  Xn <- matrix(rnorm(cfg[1]*cfg[2]), cfg[1])
+  e <- pca_manual(Xn, scale. = TRUE)$eigenvalues
+  g <- cfg[2]/cfg[1]
+  cat(sprintf("  %6d%7d%8.1f%14.2f%10.2f\n", cfg[1], cfg[2], g, e[1], (1+sqrt(g))^2))
+}
+cat("  With p >> n, noise alone produces enormous leading eigenvalues.\n")
+```
+
+## 4. Sign and rotation indeterminacy
+
+```{r sign}
+header("4. PC signs are arbitrary; near-tied PCs are unstable")
+r1 <- pca_manual(X); r2 <- pca_manual(X[, ncol(X):1])
+cat(sprintf("  PC1 PVE, original order : %.6f\n", r1$pve[1]))
+cat(sprintf("  PC1 PVE, reversed order : %.6f   <- identical\n", r2$pve[1]))
+cat(sprintf("  correlation of the two PC1 score vectors: %+.6f\n",
+            cor(r1$scores[, 1], r2$scores[, 1])))
+cat("  |correlation| = 1, but the SIGN can flip. Never interpret the sign of\n")
+cat("  a PC without anchoring it to a known feature.\n")
+set.seed(1704)
+base <- matrix(rnorm(80*2), 80) %*% diag(c(2.0, 1.98))    # NEARLY equal
+Xtie <- cbind(base, matrix(rnorm(80*20, 0, 0.3), 80))
+orig <- pca_manual(Xtie)$loadings[, 1]
+sims <- replicate(50, {
+  idx <- sample(80, 80, TRUE)
+  abs(sum(pca_manual(Xtie[idx, ])$loadings[, 1] * orig))
+})
+cat(sprintf("\n  Near-tied eigenvalues -> unstable individual eigenvectors:\n"))
+cat(sprintf("    eigenvalues 1,2 = %s\n",
+            paste(sprintf("%.3f", pca_manual(Xtie)$eigenvalues[1:2]), collapse = " ")))
+cat(sprintf("    mean |cos| between bootstrap PC1 and original PC1: %.3f\n", mean(sims)))
+cat("    Only the SUBSPACE spanned by tied PCs is well defined.\n")
+```
+
+## 5. PC x metadata association, eq. (17.6)
+
+```{r pc-metadata}
+header("5. Which covariate explains each PC? (17.6)")
+set.seed(1705)
+n_samp <- 40; G <- 2000
+meta <- data.frame(condition = rep(c("ctrl","trt"), n_samp/2),
+                   batch = rep(c("b1","b2","b3","b4"), each = n_samp/4),
+                   sex = sample(c("F","M"), n_samp, TRUE),
+                   lib_size = rlnorm(n_samp, log(2e7), 0.3))
+expr <- matrix(rnorm(n_samp * G), n_samp)
+batch_load <- matrix(rnorm(4 * G), 4)
+for (i in 1:4) expr[meta$batch == paste0("b", i), ] <-
+  expr[meta$batch == paste0("b", i), ] + 2.2 * rep(batch_load[i, ], each = sum(meta$batch == paste0("b", i)))
+expr[meta$condition == "trt", 1:200] <- expr[meta$condition == "trt", 1:200] + 0.9
+expr <- expr + 0.6 * as.vector(scale(log(meta$lib_size)))
+pc <- pca_manual(expr)
+pc_metadata_r2 <- function(scores, meta, n_pc = 5) {
+  out <- data.frame(PC = 1:n_pc, PVE = NA)
+  for (col in names(meta)) out[[col]] <- NA
+  for (j in 1:n_pc) {
+    zj <- scores[, j]; out$PVE[j] <- NA
+    for (col in names(meta)) {
+      v <- meta[[col]]
+      out[[col]][j] <- summary(lm(zj ~ if (is.numeric(v)) v else factor(v)))$r.squared
+    }
+  }
+  out
+}
+tabm <- pc_metadata_r2(pc$scores, meta)
+tabm$PVE <- pc$pve[1:5]
+print(format(tabm, digits = 3), row.names = FALSE)
+cat("\n  PC1 is overwhelmingly explained by BATCH, not condition. That is a\n")
+cat("  technical finding, not a discovery. Build this table for EVERY dataset\n")
+cat("  before interpreting a single PCA plot (stats.md Topic 19).\n")
+```
+
+## 6. Two errors: over-reading separation, and double dipping
+
+```{r errors}
+header("6. Separation in PC space is not evidence")
+set.seed(1706)
+n_samp <- 20; G <- 5000
+Xnull <- matrix(rnorm(n_samp * G), n_samp)          # NO group structure at all
+labels <- rep(0:1, n_samp/2)
+pn <- pca_manual(Xnull)
+obs_sep <- abs(mean(pn$scores[labels == 0, 1]) - mean(pn$scores[labels == 1, 1]))
+null_sep <- replicate(2000, {
+  perm <- sample(labels)
+  abs(mean(pn$scores[perm == 0, 1]) - mean(pn$scores[perm == 1, 1]))
+})
+cat(sprintf("  n=%d, p=%d, NO real group difference\n", n_samp, G))
+cat(sprintf("  observed PC1 separation between arbitrary labels: %.3f\n", obs_sep))
+cat(sprintf("  permutation p-value: %.3f\n", (1 + sum(null_sep >= obs_sep))/2001))
+cat("  Random high-dimensional data ALWAYS spread out in the top PCs.\n")
+cat("  Permute the labels to get a null for any separation you plan to claim.\n")
+grp <- as.integer(pn$scores[, 1] > median(pn$scores[, 1]))
+top_feats <- order(-abs(pn$loadings[, 1]))[1:200]
+p_dip <- sapply(top_feats, function(j) t.test(Xnull[grp==0, j], Xnull[grp==1, j])$p.value)
+rand_feats <- sample(G, 200)
+p_rand <- sapply(rand_feats, function(j) t.test(Xnull[grp==0, j], Xnull[grp==1, j])$p.value)
+cat(sprintf("\n--- Double dipping: selecting features by PC1, then testing them ---\n"))
+cat(sprintf("  features selected by PC1 loading : %.1f%% 'significant' (pure noise)\n",
+            100*mean(p_dip < 0.05)))
+cat(sprintf("  randomly selected features       : %.1f%%\n", 100*mean(p_rand < 0.05)))
+cat("\n  Random features are only mildly inflated (the GROUPS came from PC1).\n")
+cat("  Selecting the FEATURES from the same PC1 as well is what produces the\n")
+cat("  large inflation. Split the data, or use a selective-inference test.\n")
+```
+
+## 7. Figure
+
+```{r figure}
+png(file.path(OUT, "pca.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+plot(1:15, pa$obs[1:15], type = "b", pch = 16, col = "steelblue",
+     xlab = "component", ylab = "eigenvalue", main = "Eq. (17.5): how many components?")
+lines(1:15, pa$thresh[1:15], type = "b", pch = 4, col = "darkorange")
+abline(h = mp_edge, col = "forestgreen", lty = 3)
+legend("topright", c("observed", "95th pct permuted", "MP edge"),
+       col = c("steelblue", "darkorange", "forestgreen"), pch = c(16, 4, NA),
+       lty = c(1, 1, 3), bty = "n", cex = 0.65)
+plot(pc$scores[, 1], pc$scores[, 2], pch = c(16,17,15,18)[factor(meta$batch)],
+     col = "steelblue", cex = 1.2, asp = 1,
+     xlab = sprintf("PC1 (%.0f%%)", 100*pc$pve[1]),
+     ylab = sprintf("PC2 (%.0f%%)", 100*pc$pve[2]), main = "PCA coloured by BATCH")
+legend("topright", levels(factor(meta$batch)), pch = c(16,17,15,18), bty = "n", cex = 0.65)
+plot(pc$scores[, 1], pc$scores[, 2], pch = c(16,17)[factor(meta$condition)],
+     col = "firebrick", cex = 1.2, asp = 1,
+     xlab = sprintf("PC1 (%.0f%%)", 100*pc$pve[1]),
+     ylab = sprintf("PC2 (%.0f%%)", 100*pc$pve[2]),
+     main = "Same PCA coloured by CONDITION")
+legend("topright", levels(factor(meta$condition)), pch = c(16,17), bty = "n", cex = 0.65)
+hist(null_sep, breaks = 50, col = "lightsteelblue", border = "white",
+     main = "Separation on NOISE: permutation null", xlab = "PC1 separation")
+abline(v = obs_sep, col = "red", lwd = 2)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "pca.png"), "\n")
+```
+
+## Decision rules (from `stats.md` Topic 17)
+
+1. Always centre. Scale only with a stated reason.
+2. Interpret PCs through loadings and metadata associations (17.6).
+3. Report the PVE for every displayed component; use equal aspect ratio.
+4. Never test features on the same data that defined the component.
+
+**Next:** `18_distances_and_clustering.R`

@@ -1,0 +1,31 @@
+# =============================================================================
+# Python teaching/analysis image for "Statistics for Bioinformatics".
+#
+# Build (from the repository root):
+#     docker build -f docker/Dockerfile.python -t learn-stats-py:1.0 .
+#
+# Run a script:
+#     docker run --rm -v "$PWD":/work -w /work learn-stats-py:1.0 \
+#         python statsPy/core/01_study_design_and_estimands.py
+#
+# Run JupyterLab:
+#     docker run --rm -p 8888:8888 -v "$PWD":/work -w /work learn-stats-py:1.0 \
+#         jupyter lab --ip=0.0.0.0 --no-browser --allow-root
+# =============================================================================
+FROM python:3.12-slim
+
+# MPLBACKEND=Agg  -> matplotlib never tries to open a GUI window, so every
+#                    script is runnable head-less inside the container.
+# PYTHONHASHSEED  -> makes hash-order-dependent operations deterministic.
+ENV MPLBACKEND=Agg \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=0
+
+WORKDIR /work
+
+COPY env/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+CMD ["python", "--version"]

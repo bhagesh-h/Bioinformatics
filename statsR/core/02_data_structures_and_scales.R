@@ -1,0 +1,235 @@
+#' ---
+#' title: "Module 02 - Data structures, measurement scales, transformations"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 2, equations (2.1)-(2.7)
+#'
+#' ## What you will learn
+#'
+#' 1. The assay triple and why the alignment contract (2.1) must be ASSERTED.
+#' 2. How the support of a measurement determines its likelihood.
+#' 3. log+c (2.2)-(2.3), logit/M (2.4), arcsinh (2.5) -- and what each does to
+#'    the variance.
+#' 4. Why compositional closure (2.6) forces negative correlations (2.7).
+
+#+ setup, message = FALSE
+MODULE_NAME <- "02_data_structures_and_scales"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. The assay triple and the alignment contract, eq. (2.1)
+#'
+#' Bioconductor's `SummarizedExperiment` exists to enforce (2.1) automatically
+#' under subsetting and reordering. With plain matrices you must do it yourself.
+#' A violated contract produces code that RUNS WITHOUT ERROR and is entirely
+#' wrong -- the worst possible failure mode.
+
+#+ assay-triple
+header("1. Asserting the alignment contract (2.1)")
+
+new_assay_data <- function(assay, row_data, col_data) {
+  ## A minimal SummarizedExperiment. The point is not the structure, it is the
+  ## validate() call: alignment is checked on construction AND after subsetting.
+  obj <- list(assay = assay, row_data = row_data, col_data = col_data)
+  class(obj) <- "assay_data"
+  validate_assay_data(obj)
+}
+
+validate_assay_data <- function(obj) {
+  if (!identical(colnames(obj$assay), rownames(obj$col_data))) {
+    stop("ALIGNMENT VIOLATION: assay columns != col_data rows.\n  assay: ",
+         paste(head(colnames(obj$assay), 4), collapse = ", "),
+         "\n  meta : ", paste(head(rownames(obj$col_data), 4), collapse = ", "))
+  }
+  if (!identical(rownames(obj$assay), rownames(obj$row_data))) {
+    stop("ALIGNMENT VIOLATION: assay rows != row_data rows.")
+  }
+  obj
+}
+
+subset_samples <- function(obj, keep) {
+  new_assay_data(obj$assay[, keep, drop = FALSE], obj$row_data,
+                 obj$col_data[keep,, drop = FALSE])
+}
+
+set.seed(11)
+genes <- sprintf("GENE%03d", 1:6)
+samples <- sprintf("S%d", 1:8)
+se <- new_assay_data(
+  assay = matrix(rpois(48, 50), 6, 8, dimnames = list(genes, samples)),
+  row_data = data.frame(chrom = rep(c("chr1", "chr2"), each = 3),
+                        row.names = genes),
+  col_data = data.frame(condition = rep(c("ctrl", "trt"), each = 4),
+                        batch = rep(c("b1", "b1", "b2", "b2"), 2),
+                        row.names = samples))
+cat(sprintf("AssayData: %d features x %d samples\n",
+            nrow(se$assay), ncol(se$assay)))
+print(se$col_data)
+
+sub <- subset_samples(se, c("S1", "S3", "S6"))
+cat("\nAfter subsetting, metadata travels with the data:\n")
+print(sub$col_data)
+
+cat("\nNow the classic bug - metadata sorted, assay not:\n")
+scrambled <- se
+scrambled$col_data <- se$col_data[order(se$col_data$condition,
+                                        decreasing = TRUE),, drop = FALSE]
+res <- try(validate_assay_data(scrambled), silent = TRUE)
+cat("  Caught before it could do damage:\n   ",
+    strsplit(attr(res, "condition")$message, "\n")[[1]][1], "\n")
+cat("\nRULE: assert eq. (2.1) at the top of every script and after every merge.\n")
+cat("In R, `merge()` REORDERS rows by default - a very common source of this.\n")
+
+#' ## 2. Support determines the likelihood
+
+#+ scales
+header("2. Support -> natural model")
+scale_table <- data.frame(
+  Measurement = c("Read counts", "Counts out of N", "Log intensity",
+                  "Methylation beta", "Relative abundance", "Time to event",
+                  "Pathology grade"),
+  Support = c("{0,1,2,...}", "{0..N}", "R", "[0,1]", "simplex", "[0,Inf) + censoring",
+              "ordered categories"),
+  Model = c("Poisson / negative binomial", "Binomial / beta-binomial", "Normal",
+            "Beta / logit-normal", "Log-ratio / Dirichlet-mult.",
+            "Survival / hazard", "Ordinal (proportional odds)"))
+print(scale_table, row.names = FALSE)
+
+#' ## 3. log with a pseudocount, eq. (2.2)-(2.3)
+#'
+#' $$\operatorname{Var}(\log_2(Y+c)) \approx
+#'   \frac{1}{(\ln 2)^2}\cdot\frac{\mu+\phi\mu^2}{(\mu+c)^2}$$
+
+#+ log-transform
+header("3. log(y + c): delta-method prediction (2.3) vs simulation")
+
+## NOTE R's parameterisation: rnbinom(n, mu =, size = ) where size = 1/phi.
+nb_sample <- function(n, mu, phi) rnbinom(n, mu = mu, size = 1 / phi)
+delta_var_log2 <- function(mu, phi, c) (mu + phi * mu^2) / ((mu + c)^2 * log(2)^2)
+
+PHI <- 0.16   # typical human bulk RNA-seq dispersion (BCV = 0.4)
+cat(sprintf("dispersion phi = %.2f  (asymptote phi/(ln2)^2 = %.4f)\n\n",
+            PHI, PHI / log(2)^2))
+cat(sprintf("%8s %5s %13s %11s %7s\n", "mu", "c", "delta (2.3)", "simulated", "ratio"))
+set.seed(21)
+for (mu in c(1, 5, 20, 100, 1000)) {
+  for (cc in c(0.5, 1, 8)) {
+    y <- nb_sample(2e5, mu, PHI)
+    emp <- var(log2(y + cc))
+    theo <- delta_var_log2(mu, PHI, cc)
+    cat(sprintf("%8d %5.1f %13.4f %11.4f %7.2f\n", mu, cc, theo, emp, emp / theo))
+  }
+}
+cat("\nRead the c=0.5 rows: at mu=1 the variance is ~10x the asymptote.\n")
+cat("Small pseudocounts hugely inflate the variance of low-count features,\n")
+cat("which is why you filter them (stats.md Topics 8, 20).\n")
+
+#' ## 4. logit / M-value, eq. (2.4)
+
+#+ mvalues
+header("4. beta vs M-values: heteroscedasticity (2.4)")
+beta_to_m <- function(b, eps = 1e-6) { b <- pmin(pmax(b, eps), 1 - eps); log2(b / (1 - b)) }
+m_to_beta <- function(m) 2^m / (2^m + 1)
+
+set.seed(31)
+cat(sprintf("%15s %10s %8s\n", "true mean beta", "SD(beta)", "SD(M)"))
+for (target in c(0.02, 0.10, 0.30, 0.50, 0.70, 0.95)) {
+  m_draws <- rnorm(5e4, log2(target / (1 - target)), 0.5)  # constant SD on M
+  cat(sprintf("%15.2f %10.4f %8.4f\n", target, sd(m_to_beta(m_draws)), sd(m_draws)))
+}
+cat("\nSD on beta varies ~4x across the range; SD on M is constant by\n")
+cat("construction. MODEL ON M, REPORT ON BETA (stats.md Topic 23).\n")
+cat(sprintf("Round trip: M = 1.5 corresponds to beta = %.4f\n", m_to_beta(1.5)))
+
+#' ## 5. arcsinh, eq. (2.5)
+
+#+ arcsinh
+header("5. arcsinh with cofactor c (2.5)")
+## R has no asinh-with-cofactor helper, so define it. Note base R DOES have
+## asinh(), which handles negatives natively - unlike log().
+arcsinh_transform <- function(y, cofactor) asinh(y / cofactor)
+
+test_values <- c(-50, -5, 0, 1, 5, 50, 500, 5000)
+cat(sprintf("%10s %12s %13s %11s\n", "raw", "asinh c=5", "asinh c=150", "log10(y)"))
+for (v in test_values) {
+  lg <- if (v > 0) sprintf("%.3f", log10(v)) else "undefined"
+  cat(sprintf("%10.1f %12.3f %13.3f %11s\n",
+              v, arcsinh_transform(v, 5), arcsinh_transform(v, 150), lg))
+}
+cat("\nc=5 is the CyTOF convention; c=150 typical for fluorescence flow.\n")
+cat("arcsinh handles the negative values compensation produces.\n")
+
+#' ## 6. Compositional closure, eq. (2.6)-(2.7)
+
+#+ closure
+header("6. Closure manufactures correlations (2.6)-(2.7)")
+set.seed(41)
+D <- 5; n <- 3000
+absolute <- sapply(c(3, 2.5, 2, 1.5, 1), function(m) rlnorm(n, m, 0.6))
+relative <- absolute / rowSums(absolute)                    # closure (2.6)
+
+corr_abs <- cor(absolute); corr_rel <- cor(relative)
+off <- upper.tri(corr_abs)
+cat(sprintf("Correlation among ABSOLUTE abundances (truth: independent):\n"))
+cat(sprintf("  max |off-diagonal r| = %.3f\n", max(abs(corr_abs[off]))))
+cat(sprintf("\nCorrelation among RELATIVE abundances (after closure):\n"))
+cat(sprintf("  max |off-diagonal r| = %.3f\n", max(abs(corr_rel[off]))))
+cat(sprintf("  mean off-diagonal r  = %+.3f  (negative!)\n", mean(corr_rel[off])))
+cat("\nRow sums of the relative covariance matrix - eq. (2.7) predicts 0:\n  ")
+cat(sprintf("%.2e ", rowSums(cov(relative))), "\n")
+cat("\nEvery correlation you see in closed data was manufactured by the\n")
+cat("constraint. This is why microbiome analysis needs log-ratios (Topic 26).\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "transformations.png"), width = 1300, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+
+set.seed(51)
+mus <- 10^seq(0, 3.5, length.out = 30)
+raw_sd <- sapply(mus, function(m) sd(nb_sample(2e4, m, PHI)))
+log_sd <- sapply(mus, function(m) sd(log2(nb_sample(2e4, m, PHI) + 1)))
+plot(mus, raw_sd, log = "xy", type = "b", pch = 16, cex = 0.6, col = "steelblue",
+     xlab = "mean count mu", ylab = "standard deviation",
+     main = "Eq. (2.2)-(2.3): log stabilises variance")
+lines(mus, log_sd, type = "b", pch = 15, cex = 0.6, col = "darkorange")
+abline(h = sqrt(PHI) / log(2), lty = 3)
+legend("topleft", c("SD(raw counts)", "SD(log2(y+1))", "asymptote"),
+       col = c("steelblue", "darkorange", "black"), lty = c(1, 1, 3),
+       pch = c(16, 15, NA), bty = "n", cex = 0.7)
+
+betas <- seq(0.01, 0.99, length.out = 60)
+sd_beta <- sapply(betas, function(b) sd(m_to_beta(rnorm(4000, log2(b/(1-b)), 0.5))))
+plot(betas, sd_beta, type = "l", lwd = 2, col = "steelblue",
+     xlab = "mean methylation beta", ylab = "SD on the beta scale",
+     main = "Eq. (2.4): beta is heteroscedastic")
+abline(h = 0.5, col = "darkorange", lty = 2)
+legend("topright", c("SD(beta)", "SD(M) = 0.5 (constant)"),
+       col = c("steelblue", "darkorange"), lty = c(1, 2), bty = "n", cex = 0.7)
+
+yy <- seq(-100, 5000, length.out = 2000)
+plot(yy, asinh(yy / 5), type = "l", lwd = 2, col = "steelblue",
+     xlab = "raw intensity", ylab = "transformed",
+     main = "Eq. (2.5): arcsinh handles negatives")
+lines(yy, asinh(yy / 150), lwd = 2, col = "darkorange")
+lines(yy[yy > 0], log(yy[yy > 0]), lwd = 2, col = "forestgreen")
+abline(v = 0, lty = 3)
+legend("bottomright", c("arcsinh c=5", "arcsinh c=150", "ln(y)"),
+       col = c("steelblue", "darkorange", "forestgreen"), lty = 1, bty = "n", cex = 0.7)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "transformations.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 2)
+#'
+#' 1. Ask what the number counts or measures before choosing a test.
+#' 2. Keep counts as counts for inference; transformed values for
+#'    visualisation, distances and PCA.
+#' 3. Model on the scale where variance is stable; report on the scale a
+#'    biologist can interpret.
+#' 4. Assert eq. (2.1) programmatically. Assert, do not assume.
+#'
+#' **Next:** `03_exploratory_data_analysis.R`

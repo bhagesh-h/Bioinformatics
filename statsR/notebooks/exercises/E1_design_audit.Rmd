@@ -1,0 +1,363 @@
+---
+title: "Exercise 1 - Audit a confounded, pseudoreplicated experiment"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topics 1, 7, 9, 14, 19
+**Core modules used:** 01, 07, 09, 14, 19
+
+## The brief
+
+A collaborator sends you this result and asks you to "just check the stats":
+
+> *"We measured marker X by imaging in primary hepatocytes. Control n = 60
+> cells, treated n = 60 cells, p = 2e-12 by t-test. The effect is highly
+> significant."*
+
+On asking, you learn:
+
+* the 60 control cells came from **3 control mice**, 20 cells each;
+* the 60 treated cells came from **3 treated mice**, 20 cells each;
+* all control mice were imaged on **Monday**, all treated on **Tuesday**.
+
+Work through Q1-Q5; each has a full worked solution commented out
+underneath. **Do not read the solution until you have written something.**
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(nlme))
+MODULE_NAME <- "E1_design_audit"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## The data
+
+```{r data}
+make_experiment <- function(seed = 1, n_mice_per_arm = 3, cells_per_mouse = 20,
+                            true_effect = 0, day_effect = 1.2,
+                            sd_mouse = 0.8, sd_cell = 1) {
+  ## `true_effect` is the real biological difference between arms; `day_effect`
+  ## is a purely technical shift applied to whichever mice were imaged on the
+  ## second day. In this design the two are indistinguishable.
+  set.seed(seed)
+  rows <- list()
+  for (arm in 0:1) {
+    label <- c("control", "treated")[arm + 1]
+    for (m in seq_len(n_mice_per_arm)) {
+      mouse_mean <- rnorm(1, 0, sd_mouse)     # the biological replicate
+      day <- arm                              # CONFOUNDED with arm
+      rows[[length(rows) + 1]] <- data.frame(
+        mouse = paste0(substr(label, 1, 4), "_", m),
+        arm = arm, condition = label, day = c("Mon", "Tue")[day + 1],
+        y = true_effect*arm + day_effect*day + mouse_mean +
+            rnorm(cells_per_mouse, 0, sd_cell))
+    }
+  }
+  d <- do.call(rbind, rows)
+  d$condition <- factor(d$condition, levels = c("control", "treated"))
+  d$mouse <- factor(d$mouse)
+  d
+}
+header("The data as reported")
+dat <- make_experiment(seed = 1)
+print(aggregate(y ~ condition, dat, function(v) c(n = length(v), mean = mean(v),
+                                                  sd = sd(v))))
+cat("\n  per mouse:\n")
+print(aggregate(y ~ condition + day + mouse, dat,
+                function(v) c(n = length(v), mean = round(mean(v), 3))))
+naive <- t.test(y ~ condition, dat, var.equal = TRUE)
+cat(sprintf("\n  The collaborator's test: t = %.2f, p = %.2e  (n = %d cells)\n",
+            naive$statistic, naive$p.value, nrow(dat)))
+```
+
+### Q1: How much of that p-value is real?
+
+Estimate the ICC (eq. 1.7), the design effect (eq. 1.8) and the effective
+sample size (eq. 1.9). How many independent observations are there really?
+
+```{r q1}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# ## Variance components from a random-intercept model that also contains the
+# ## arm, so the between-arm difference does not leak into the mouse variance.
+# ## nlme::lme ships with R and, unlike lme4, reports denominator degrees of
+# ## freedom for the fixed effects - which is exactly what this question needs.
+# fit <- lme(y ~ condition, random = ~ 1 | mouse, data = dat, method = "REML")
+# s2_mouse <- as.numeric(VarCorr(fit)["(Intercept)", "Variance"])
+# s2_cell <- as.numeric(VarCorr(fit)["Residual", "Variance"])
+# rho <- s2_mouse/(s2_mouse + s2_cell)
+# m <- mean(table(dat$mouse))
+# de <- 1 + (m - 1)*rho
+# cat(sprintf("  sigma^2_mouse = %.3f\n  sigma^2_cell  = %.3f\n", s2_mouse, s2_cell))
+# cat(sprintf("  ICC rho (eq. 1.7)       = %.3f\n", rho))
+# cat(sprintf("  design effect (eq. 1.8) = %.2f   with m = %.0f cells/mouse\n", de, m))
+# cat(sprintf("  effective n (eq. 1.9)   = %.1f  (not %d)\n", nrow(dat)/de, nrow(dat)))
+# cat(sprintf("  independent units actually randomised = %d mice\n",
+#             nlevels(dat$mouse)))
+#
+# ## The 120 cells carry the information of roughly n_eff independent
+# ## observations - and even that is optimistic, because the unit that was
+# ## RANDOMISED is the mouse. There are 6 experimental units, 3 per arm. The
+# ## p = 2e-12 is an artefact of treating 20 measurements of one mouse as 20
+# ## independent facts about the treatment.
+```
+
+### Q2: Analyse it correctly
+
+Produce (a) a mouse-level summary t-test and (b) a mixed model. Compare
+p-values and degrees of freedom to the naive test. Should they agree?
+
+```{r q2}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# per_mouse <- aggregate(y ~ mouse + condition, dat, mean)
+# tt <- t.test(y ~ condition, per_mouse, var.equal = TRUE)
+# ## lme's summary already carries the right denominator df: the treatment is a
+# ## BETWEEN-mouse contrast, so it is tested on mice, not on cells.
+# cs <- summary(fit)$tTable
+# cat(sprintf("  %-38s%10s%9s%12s\n", "analysis", "estimate", "df", "p"))
+# cat(sprintf("  %-38s%10.3f%9.0f%12.2e\n", "naive cell-level t-test (WRONG)",
+#             diff(tapply(dat$y, dat$condition, mean)), naive$parameter,
+#             naive$p.value))
+# cat(sprintf("  %-38s%10.3f%9.0f%12.3f\n", "mouse-level summary t-test",
+#             diff(tapply(per_mouse$y, per_mouse$condition, mean)),
+#             tt$parameter, tt$p.value))
+# cat(sprintf("  %-38s%10.3f%9.0f%12.3f\n", "mixed model (nlme::lme)",
+#             cs[2, "Value"], cs[2, "DF"], cs[2, "p-value"]))
+#
+# ## All three give the SAME estimate. What differs is the reference
+# ## distribution: the naive test claims 118 degrees of freedom, the honest
+# ## analyses about 4.
+# ##
+# ## Note how closely the mixed model and the summary t-test agree, and that
+# ## lme reports 4 denominator df - the same as the summary test. With a
+# ## balanced design and only a random intercept, the mixed model reduces
+# ## essentially to the analysis of mouse means.
+# ##
+# ## This is a real advantage of `nlme::lme` over both `lme4::lmer` (which
+# ## refuses to report df at all, on the grounds that no single value is
+# ## correct) and Python's `statsmodels.mixedlm` (which reports a Wald z-test,
+# ## i.e. infinite df, and so gives a p-value several times too small here).
+# ## When clusters are few, the denominator df is not a detail - it is the
+# ## whole answer. Use `lme`, `lmerTest::lmer` with Satterthwaite/KR df, or
+# ## simply aggregate to the cluster and run a t-test.
+# ##
+# ## The honest p-value is around 0.06, not 2e-12 - and it is a p-value for
+# ## "arm OR day", which Q3 shows cannot be separated.
+```
+
+### Q3: The confound
+
+Fit a model containing both `arm` and `day`. What happens, and why?
+
+```{r q3}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# mm <- model.matrix(~ condition + day, dat)
+# cat("  design matrix columns:", paste(colnames(mm), collapse = ", "), "\n")
+# cat(sprintf("  rank = %d, columns = %d\n", qr(mm)$rank, ncol(mm)))
+# cat(sprintf("  correlation(arm, day) = %.3f\n",
+#             cor(dat$arm, as.integer(dat$day == "Tue"))))
+# bad <- lm(y ~ condition + day, dat)
+# cat("\n  lm() coefficients:\n")
+# print(round(coef(bad), 4))
+# cat(sprintf("\n  coefficient for dayTue is %s\n",
+#             ifelse(is.na(coef(bad)["dayTue"]), "NA - R DROPPED IT", "estimated")))
+#
+# ## The design matrix is RANK DEFICIENT: `conditiontreated` and `dayTue` are
+# ## the same column. R does not fail - it silently sets the aliased
+# ## coefficient to NA and reports the other one, which is the SUM of the
+# ## biological and technical effects with no way to split them.
+# ##
+# ## This is not a modelling problem with a modelling solution. No covariate,
+# ## no random effect, no ComBat can separate two perfectly collinear
+# ## variables: the information is not in the data. The only honest report is
+# ## "arm and imaging day are completely confounded; this experiment cannot
+# ## estimate the treatment effect."
+# ##
+# ## Always check `qr(model.matrix(...))$rank` and look for NA coefficients.
+```
+
+### Q4: Design it properly
+
+Re-simulate with the same budget but the arms **balanced across both days**.
+Show the confound is now separable and that the false positive rate is
+controlled when there is no true effect.
+
+```{r q4}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# make_balanced <- function(seed, true_effect = 0, day_effect = 1.2,
+#                           n_mice_per_arm = 4, cells_per_mouse = 20,
+#                           sd_mouse = 0.8, sd_cell = 1) {
+#   set.seed(seed)
+#   rows <- list()
+#   for (arm in 0:1) for (m in seq_len(n_mice_per_arm)) {
+#     mouse_mean <- rnorm(1, 0, sd_mouse)
+#     day <- (m - 1) %% 2                       # arms balanced across days
+#     rows[[length(rows) + 1]] <- data.frame(
+#       mouse = paste0(arm, "_", m), arm = arm, day = day,
+#       y = true_effect*arm + day_effect*day + mouse_mean +
+#           rnorm(cells_per_mouse, 0, sd_cell))
+#   }
+#   do.call(rbind, rows)
+# }
+# db <- make_balanced(2)
+# mb <- model.matrix(~ arm + day, db)
+# cat(sprintf("  rank = %d of %d columns -> identifiable\n", qr(mb)$rank, ncol(mb)))
+# cat(sprintf("  correlation(arm, day) = %+.3f\n", cor(db$arm, db$day)))
+#
+# ## A SINGLE experiment estimates each effect with wide uncertainty (8 mice),
+# ## so judge the DESIGN by averaging over replicates: an identifiable design
+# ## is one whose estimates are UNBIASED, not one that is right once.
+# est <- t(sapply(1:400, function(i) {
+#   d2 <- make_balanced(5000 + i)
+#   pm <- aggregate(y ~ mouse + arm + day, d2, mean)
+#   coef(lm(y ~ arm + day, pm))[c("arm", "day")]
+# }))
+# cat(sprintf("\n  over 400 balanced experiments:\n"))
+# cat(sprintf("    arm estimate: mean %+.3f (truth  0.0), SD %.3f\n",
+#             mean(est[, "arm"]), sd(est[, "arm"])))
+# cat(sprintf("    day estimate: mean %+.3f (truth +1.2), SD %.3f\n",
+#             mean(est[, "day"]), sd(est[, "day"])))
+#
+# ## False positive rates with NO true effect.
+# R <- 500
+# fp_bal <- fp_adj <- fp_conf <- 0
+# for (i in 1:R) {
+#   d2 <- make_balanced(1000 + i)
+#   pm <- aggregate(y ~ mouse + arm + day, d2, mean)
+#   fp_bal <- fp_bal + (t.test(y ~ arm, pm, var.equal = TRUE)$p.value < 0.05)
+#   fp_adj <- fp_adj +
+#     (coef(summary(lm(y ~ arm + day, pm)))["arm", "Pr(>|t|)"] < 0.05)
+#   dc <- make_experiment(seed = 1000 + i)
+#   pc <- aggregate(y ~ mouse + arm, dc, mean)
+#   fp_conf <- fp_conf + (t.test(y ~ arm, pc, var.equal = TRUE)$p.value < 0.05)
+# }
+# cat(sprintf("\n  false positive rate, %d experiments with NO true effect (nominal 5%%):\n", R))
+# cat(sprintf("    balanced, mouse-level t-test, day ignored : %5.1f%%\n", 100*fp_bal/R))
+# cat(sprintf("    balanced, mouse-level model adjusting day : %5.1f%%\n", 100*fp_adj/R))
+# cat(sprintf("    CONFOUNDED design, same t-test            : %5.1f%%  <- day read as biology\n",
+#             100*fp_conf/R))
+#
+# ## Balancing costs NOTHING - same mice, same cells, same money - and turns an
+# ## uninterpretable experiment into an interpretable one.
+# ##
+# ## Note the two balanced rows. Ignoring day is already VALID: with the arms
+# ## balanced across days the day effect cancels, so there is no bias (if
+# ## anything the test is conservative, because the unmodelled day effect
+# ## inflates the residual variance). Adjusting for day removes that nuisance
+# ## variance and buys back POWER. Balance protects validity; adjustment
+# ## recovers efficiency. The confounded design has neither.
+```
+
+### Q5: What would have been enough?
+
+Given the ICC from Q1, how many **mice** per arm are needed for 80% power
+to detect a true effect of 0.8 SD? Does adding cells help?
+
+```{r q5}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# power_mice <- function(n_mice, cells, effect = 0.8, sd_mouse = 0.8,
+#                        sd_cell = 1, R = 2000, seed = 1) {
+#   set.seed(seed)
+#   ## SD of a mouse MEAN of `cells` cells - eq. (1.5).
+#   se_mouse <- sqrt(sd_mouse^2 + sd_cell^2/cells)
+#   mean(replicate(R, {
+#     a <- rnorm(n_mice, 0, se_mouse); b <- rnorm(n_mice, effect, se_mouse)
+#     t.test(b, a, var.equal = TRUE)$p.value < 0.05
+#   }))
+# }
+# cells_grid <- c(5, 20, 100, 1000)
+# cat(sprintf("  %-12s", "mice/arm"))
+# cat(sprintf("%12s", paste0("cells=", cells_grid)), "\n")
+# for (nm in c(3, 5, 8, 12, 20)) {
+#   cat(sprintf("  %-12d", nm))
+#   for (cc in cells_grid)
+#     cat(sprintf("%11.0f%%", 100*power_mice(nm, cc, seed = nm*100 + cc)))
+#   cat("\n")
+# }
+#
+# ## Read ACROSS a row: multiplying cells per mouse by 200 barely moves the
+# ## power, because Var(mouse mean) = sigma_b^2 + sigma_e^2/m has a FLOOR at
+# ## sigma_b^2 = 0.64 that no number of cells can cross (eq. 1.6). Read DOWN a
+# ## column: mice buy power directly.
+# ##
+# ## The original experiment had 3 mice per arm and therefore about 15% power
+# ## for a large (0.8 SD) effect - it would miss a real effect of that size
+# ## five times out of six. Reaching 80% needs roughly 20 mice per arm. The
+# ## study was under-resourced by a factor of ~6 in the only dimension that
+# ## buys power, while over-sampling 20x in a dimension that buys almost none.
+```
+
+## Debrief: the generative truth
+
+```{r debrief}
+header("The generative truth")
+cat("  true_effect = 0.0      <- there is NO biological difference between arms
+  day_effect  = 1.2      <- a purely technical shift on the second imaging day
+  sd_mouse    = 0.8      <- biological variation between mice
+  sd_cell     = 1.0      <- measurement/cell variation within a mouse
+
+  The collaborator's p = 2e-12 is entirely manufactured by two errors:
+
+    1. PSEUDOREPLICATION. 120 cells treated as 120 independent observations.
+       There were 6 independent units. (Topic 1)
+
+    2. CONFOUNDING. The arms differ by imaging day as well as treatment, and
+       the two are perfectly collinear, so the 1.2-unit day effect is read
+       off as a biological effect. (Topic 19)
+
+  Either error alone would be serious; together they turn pure noise into a
+  headline result. Neither is visible in the summary statistics the
+  collaborator originally sent - you had to ask how the samples were
+  collected. That question is the single highest-value thing a statistician
+  does.\n")
+
+png(file.path(OUT, "design_audit.png"), width = 1000, height = 420, res = 110)
+par(mfrow = c(1, 2), mar = c(4.5, 4.2, 2.5, 1))
+plot(jitter(dat$arm, 0.6), dat$y, pch = 16, cex = 0.45,
+     col = adjustcolor(c("steelblue", "darkorange")[dat$arm + 1], 0.5),
+     xaxt = "n", xlab = "", ylab = "marker X",
+     main = "120 cells, but 6 independent units")
+axis(1, 0:1, c("control\n(Monday)", "treated\n(Tuesday)"), padj = 0.5)
+pm <- aggregate(y ~ mouse + arm, dat, mean)
+points(pm$arm, pm$y, pch = "_", cex = 3)
+cells <- c(1, 2, 5, 10, 20, 50, 100, 500, 1000)
+plot(cells, sqrt(0.8^2 + 1/cells), type = "l", lwd = 2, col = "firebrick",
+     log = "x", xlab = "cells per mouse", ylab = "SD of a mouse mean",
+     main = "More cells cannot cross the floor")
+abline(h = 0.8, lty = 2, col = "grey40")
+legend("topright", c("SE of a mouse mean", "floor sigma_b (eq. 1.6)"),
+       col = c("firebrick", "grey40"), lty = c(1, 2), lwd = 2, bty = "n", cex = 0.7)
+invisible(dev.off())
+cat("Figure written to", file.path(OUT, "design_audit.png"), "\n")
+```
+
+## What to take away
+
+1. Ask **what was randomised**. That is $n$.
+2. The design effect $1+(m-1)\rho$ converts a big-looking dataset into the
+   handful of independent observations it really contains.
+3. Perfect confounding is not fixable by analysis. Balance at design time.
+4. Replicates buy power; sub-samples hit a floor almost immediately.
+
+**Next:** `E2_rnaseq_end_to_end.R`

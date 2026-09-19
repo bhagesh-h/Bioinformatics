@@ -1,0 +1,225 @@
+#' ---
+#' title: "Module 16 - Matrix algebra for high-dimensional biology"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 16, equations (16.1)-(16.11)
+#'
+#' ## What you will learn
+#'
+#' 1. Projection (16.2): regression, correlation and projection are ONE idea.
+#' 2. The centering matrix (16.3) and covariance/Gram duality (16.4).
+#' 3. Rank and identifiability (16.5).
+#' 4. SVD (16.6)-(16.7) and Eckart-Young (16.8).
+#' 5. Pseudoinverse (16.9) and condition number (16.10).
+#' 6. Quadratic forms (16.11): why ANOVA sums of squares are chi-squared.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages(library(MASS))
+MODULE_NAME <- "16_matrix_algebra"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. Projection = regression = correlation, eq. (16.1)-(16.2)
+
+#+ projection
+header("1. Three names for one operation (16.1)-(16.2)")
+set.seed(1601)
+n <- 50; xv <- rnorm(n); yv <- 1.7*xv + rnorm(n)
+xc <- xv - mean(xv); yc <- yv - mean(yv)
+proj_coef <- sum(xc*yc) / sum(xc*xc)                            # eq. (16.2)
+ols_slope <- coef(lm(yv ~ xv))[2]
+rr <- sum(xc*yc) / (sqrt(sum(xc^2)) * sqrt(sum(yc^2)))
+cat(sprintf("  projection coefficient <x,y>/<x,x> = %.8f\n", proj_coef))
+cat(sprintf("  OLS slope                          = %.8f\n", ols_slope))
+cat(sprintf("  Pearson r                          = %.8f\n", rr))
+cat(sprintf("  r * ||y||/||x||                    = %.8f   <- equals the slope\n",
+            rr * sqrt(sum(yc^2)) / sqrt(sum(xc^2))))
+cat("\n  Correlation IS the cosine of the angle between the centred vectors.\n")
+
+#' ## 2. Centering matrix and covariance/Gram duality, eq. (16.3)-(16.4)
+
+#+ duality
+header("2. S and K share eigenvalues - use the smaller one (16.3)-(16.4)")
+set.seed(1602)
+n_samp <- 12; p_feat <- 4000
+X <- matrix(rnorm(n_samp * p_feat), nrow = n_samp)
+C <- diag(n_samp) - matrix(1/n_samp, n_samp, n_samp)            # eq. (16.3)
+Xc <- C %*% X
+cat(sprintf("  C symmetric? %s   idempotent? %s   rank(C) = %d (= n-1 = %d)\n",
+            isTRUE(all.equal(C, t(C))), isTRUE(all.equal(C %*% C, C)),
+            qr(C)$rank, n_samp - 1))
+cat(sprintf("  column means after centering: max |mean| = %.2e\n",
+            max(abs(colMeans(Xc)))))
+t_S <- system.time({ S <- crossprod(Xc) / (n_samp - 1)          # p x p
+                     ev_S <- sort(eigen(S, only.values = TRUE)$values, TRUE)[1:n_samp] })
+t_K <- system.time({ K <- tcrossprod(Xc)                        # n x n
+                     ev_K <- sort(eigen(K, only.values = TRUE)$values, TRUE) / (n_samp-1) })
+cat(sprintf("\n  %d samples x %d features\n", n_samp, p_feat))
+cat(sprintf("  top 5 eigenvalues from the %dx%d covariance : %s\n", p_feat, p_feat,
+            paste(sprintf("%.3f", ev_S[1:5]), collapse = " ")))
+cat(sprintf("  top 5 eigenvalues from the %dx%d Gram matrix : %s\n", n_samp, n_samp,
+            paste(sprintf("%.3f", ev_K[1:5]), collapse = " ")))
+cat(sprintf("  max |difference| = %.2e\n",
+            max(abs(ev_S[1:(n_samp-1)] - ev_K[1:(n_samp-1)]))))
+cat(sprintf("\n  timing: covariance route %8.2f ms\n", 1000*t_S[["elapsed"]]))
+cat(sprintf("          Gram route       %8.2f ms   (%.0fx faster)\n",
+            1000*t_K[["elapsed"]], t_S[["elapsed"]]/max(t_K[["elapsed"]], 1e-9)))
+cat(sprintf("  At most min(n-1, p) = %d non-zero eigenvalues exist, no matter\n",
+            min(n_samp - 1, p_feat)))
+cat("  how many features you measured.\n")
+
+#' ## 3. Rank and identifiability, eq. (16.5)
+
+#+ rank
+header("3. Rank deficiency = an unanswerable design (16.5)")
+design_report <- function(condition, batch, label) {
+  Xd <- model.matrix(~ factor(condition) + factor(batch))
+  r <- qr(Xd)$rank; sv <- svd(Xd)$d
+  cat(label, "\n")
+  cat(sprintf("    shape %dx%d, rank %d, singular values %s\n", nrow(Xd), ncol(Xd), r,
+              paste(sprintf("%.4f", sv), collapse = " ")))
+  if (r < ncol(Xd)) {
+    V <- svd(Xd)$v
+    cat(sprintf("    -> RANK DEFICIENT: %d direction(s) unidentifiable\n", ncol(Xd) - r))
+    cat(sprintf("    null-space vector (the aliasing): %s\n",
+                paste(sprintf("%.4f", V[, ncol(V)]), collapse = " ")))
+  } else cat("    -> full rank: every effect is estimable\n")
+  cat("\n")
+}
+design_report(rep(c("ctrl","trt"), 6), rep(c("b1","b2","b3"), each = 4),
+              "Balanced design:")
+design_report(rep(c("ctrl","trt"), each = 6), rep(c("b1","b2"), each = 6),
+              "Confounded design:")
+cat("  The null-space vector states the exact linear combination the data\n")
+cat("  cannot distinguish. No software resolves this - only a new design.\n")
+
+#' ## 4. SVD and Eckart-Young, eq. (16.6)-(16.8)
+
+#+ svd
+header("4. SVD properties and optimal low-rank approximation (16.6)-(16.8)")
+set.seed(1603)
+n_s <- 40; p_f <- 200; true_rank <- 3
+A <- matrix(rnorm(n_s*true_rank), n_s) %*% matrix(rnorm(true_rank*p_f), true_rank) +
+  matrix(rnorm(n_s*p_f, 0, 0.5), n_s)
+sv <- svd(A)                                                    # eq. (16.6)
+cat(sprintf("  A is %dx%d; SVD gives U%dx%d, d(%d), V%dx%d\n", n_s, p_f,
+            nrow(sv$u), ncol(sv$u), length(sv$d), nrow(sv$v), ncol(sv$v)))
+cat(sprintf("  U orthonormal? %s   V orthonormal? %s\n",
+            isTRUE(all.equal(crossprod(sv$u), diag(ncol(sv$u)))),
+            isTRUE(all.equal(crossprod(sv$v), diag(ncol(sv$v))))))
+cat(sprintf("  reconstruction error ||A - U D V'|| = %.2e\n",
+            norm(A - sv$u %*% diag(sv$d) %*% t(sv$v), "F")))
+cat(sprintf("\n  first 8 singular values: %s\n",
+            paste(sprintf("%.3f", sv$d[1:8]), collapse = " ")))
+cat("  The gap after the 3rd value reveals the true rank.\n")
+cat(sprintf("\n  eigenvalues of A'A : %s\n",
+            paste(sprintf("%.3f", sort(eigen(crossprod(A), only.values = TRUE)$values, TRUE)[1:5]),
+                  collapse = " ")))
+cat(sprintf("  d^2                : %s   <- eq. (16.7)\n",
+            paste(sprintf("%.3f", sv$d[1:5]^2), collapse = " ")))
+cat(sprintf("\n  Eckart-Young check - ||A - A_k||_F^2 vs sum_{j>k} d_j^2:\n"))
+cat(sprintf("  %4s%14s%18s%16s\n", "k", "actual", "sum d_j^2 (j>k)", "random rank-k"))
+for (k in c(1, 2, 3, 5, 10)) {
+  Ak <- sv$u[, 1:k, drop = FALSE] %*% diag(sv$d[1:k], k) %*% t(sv$v[, 1:k, drop = FALSE])
+  Q <- qr.Q(qr(matrix(rnorm(p_f*k), p_f)))
+  Arand <- A %*% Q %*% t(Q)
+  cat(sprintf("  %4d%14.3f%18.3f%16.3f\n", k, norm(A - Ak, "F")^2,
+              sum(sv$d[(k+1):length(sv$d)]^2), norm(A - Arand, "F")^2))
+}
+cat("  The truncated SVD is provably OPTIMAL; a random subspace is far worse.\n")
+
+#' ## 5. Pseudoinverse and condition number, eq. (16.9)-(16.10)
+
+#+ pinv
+header("5. Pseudoinverse and numerical conditioning (16.9)-(16.10)")
+Xrd <- rbind(c(1,1,0), c(1,1,0), c(1,0,1), c(1,0,1))
+yrd <- c(2, 2.2, 3.1, 2.9)
+cat(sprintf("  design %dx%d, rank %d -> NOT full rank\n", nrow(Xrd), ncol(Xrd),
+            qr(Xrd)$rank))
+beta_pinv <- as.vector(ginv(Xrd) %*% yrd)                       # eq. (16.9)
+null_vec <- svd(Xrd)$v[, 3]
+alt <- beta_pinv + 3 * null_vec
+cat(sprintf("  minimum-norm solution: %s, norm = %.4f\n",
+            paste(sprintf("%.4f", beta_pinv), collapse = " "), sqrt(sum(beta_pinv^2))))
+cat(sprintf("  another exact solution: %s, norm = %.4f\n",
+            paste(sprintf("%.4f", alt), collapse = " "), sqrt(sum(alt^2))))
+cat(sprintf("  both fit equally well: RSS %.6f vs %.6f\n",
+            sum((yrd - Xrd %*% beta_pinv)^2), sum((yrd - Xrd %*% alt)^2)))
+cat("  ginv() picks the minimum-norm one - but if you needed it, your design\n")
+cat("  was rank-deficient and you should know why.\n")
+cat(sprintf("\n  %-26s%13s%14s%13s\n", "design", "kappa(X)", "kappa(X'X)", "digits lost"))
+set.seed(1604)
+bb <- rnorm(60)
+for (row_ in list(list("well-conditioned", matrix(rnorm(60*5), 60)),
+                  list("mild collinearity", cbind(1, bb, bb + rnorm(60, 0, 0.3))),
+                  list("severe collinearity", cbind(1, bb, bb + rnorm(60, 0, 0.002))))) {
+  Mk <- row_[[2]]; k <- kappa(Mk, exact = TRUE)
+  cat(sprintf("  %-26s%13.3e%14.3e%13.1f\n", row_[[1]], k,
+              kappa(crossprod(Mk), exact = TRUE), log10(k^2) - log10(k)))
+}
+cat("  kappa(X'X) = kappa(X)^2, so forming the normal equations DOUBLES the\n")
+cat("  exponent - you lose half your significant digits. Use QR or SVD.\n")
+
+#' ## 6. Quadratic forms, eq. (16.11)
+
+#+ quadratic
+header("6. Quadratic forms in projection matrices (16.11)")
+set.seed(1605)
+nq <- 30
+Xq <- cbind(1, rep(0:1, each = nq/2))
+H <- Xq %*% solve(crossprod(Xq)) %*% t(Xq)
+Mres <- diag(nq) - H
+cat(sprintf("  rank(H)   = %d = p = %d\n", qr(H)$rank, ncol(Xq)))
+cat(sprintf("  rank(I-H) = %d = n-p = %d\n", qr(Mres)$rank, nq - ncol(Xq)))
+cat(sprintf("  H idempotent? %s   (I-H) idempotent? %s   H(I-H) = 0? %s\n",
+            isTRUE(all.equal(H %*% H, H)), isTRUE(all.equal(Mres %*% Mres, Mres)),
+            isTRUE(all.equal(H %*% Mres, matrix(0, nq, nq)))))
+SIGMA <- 2
+qstats <- replicate(20000, { yq <- rnorm(nq, 5, SIGMA)
+                             as.numeric(t(yq) %*% Mres %*% yq) / SIGMA^2 })
+dfree <- nq - ncol(Xq)
+cat(sprintf("\n  simulated mean of y'(I-H)y/sigma^2 = %.4f   (chi2_%d mean = %d)\n",
+            mean(qstats), dfree, dfree))
+cat(sprintf("  simulated variance                 = %.4f   (chi2 variance = %d)\n",
+            var(qstats), 2*dfree))
+cat(sprintf("  KS test vs chi2_%d: p = %.3f\n", dfree,
+            suppressWarnings(ks.test(qstats, "pchisq", dfree)$p.value)))
+cat("\n  Cochran's theorem in action: SS terms are quadratic forms in\n")
+cat("  orthogonal projection matrices, their df are the ranks, and their\n")
+cat("  independence makes the ANOVA F-ratio an F (Module 12).\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "matrix_algebra.png"), width = 1300, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+plot(1:20, sv$d[1:20], type = "b", pch = 16, col = "steelblue",
+     xlab = "component", ylab = "singular value",
+     main = "Eq. (16.6): the spectrum reveals rank")
+abline(v = true_rank + 0.5, col = "red", lty = 2)
+ks <- 1:20
+err <- sapply(ks, function(k) norm(A - sv$u[, 1:k, drop=FALSE] %*%
+                                     diag(sv$d[1:k], k) %*% t(sv$v[, 1:k, drop=FALSE]), "F")^2)
+plot(ks, err, log = "y", type = "b", pch = 16, col = "steelblue",
+     xlab = "rank k", ylab = "||A - A_k||_F^2", main = "Eq. (16.8): Eckart-Young")
+lines(ks, sapply(ks, function(k) sum(sv$d[(k+1):length(sv$d)]^2)),
+      type = "b", pch = 4, col = "darkorange")
+legend("topright", c("truncated SVD", "sum d_j^2"), col = c("steelblue", "darkorange"),
+       pch = c(16, 4), bty = "n", cex = 0.7)
+hist(qstats, breaks = 70, freq = FALSE, col = "lightsteelblue", border = "white",
+     main = "Eq. (16.11): quadratic form is chi^2", xlab = "y'(I-H)y / sigma^2")
+curve(dchisq(x, dfree), add = TRUE, col = "red", lwd = 2)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "matrix_algebra.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 16)
+#'
+#' 1. Decide which dimension you are decomposing before interpreting output.
+#' 2. Use SVD/QR, never explicit inverses.
+#' 3. Check rank(X) and kappa(X) before fitting G feature-wise models.
+#' 4. Exploit the S <-> K duality when p >> n.
+#'
+#' **Next:** `17_pca.R`

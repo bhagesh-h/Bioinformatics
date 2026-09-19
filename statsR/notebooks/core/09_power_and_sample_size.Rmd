@@ -1,0 +1,245 @@
+---
+title: "Module 09 - Power, sample size, and design optimisation"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topic 9, equations (9.1)-(9.10)
+
+## What you will learn
+
+1. Closed-form power (9.1)-(9.4) and **Lehr's rule n ~ 16/d^2**.
+2. Why post-hoc power is a relabelling of the p-value.
+3. Pairing gains (9.5) and clustering losses (9.6).
+4. **The donors-vs-cells optimum (9.7)** and depth-vs-replicates (9.8)-(9.9).
+5. Simulation-based power (9.10).
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(pwr))
+MODULE_NAME <- "09_power_and_sample_size"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## 1. Closed-form power and sample size, eq. (9.1)-(9.4)
+
+```{r closed-form}
+header("1. Normal approximation (9.1)-(9.2) vs exact non-central t (9.4)")
+power_z <- function(d, n, alpha = 0.05) {                      # eq. (9.1)
+  lam <- d / sqrt(2 / n); z <- qnorm(1 - alpha / 2)
+  pnorm(lam - z) + pnorm(-z - lam)
+}
+n_from_z <- function(d, power = 0.8, alpha = 0.05)              # eq. (9.2)
+  2 * (qnorm(1 - alpha/2) + qnorm(power))^2 / d^2
+power_t <- function(d, n, alpha = 0.05) {                      # eq. (9.4)
+  df <- 2 * n - 2; lam <- d * sqrt(n / 2)                      # non-centrality
+  pt(qt(1 - alpha/2, df), df, lam, lower.tail = FALSE) +
+    pt(-qt(1 - alpha/2, df), df, lam)
+}
+cat(sprintf("%6s%15s%14s%15s%15s%16s\n", "d", "n/group (9.2)", "Lehr 16/d^2",
+            "exact n (9.4)", "power@exact n", "pwr::pwr.t.test"))
+for (d in c(0.2, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0)) {
+  n_exact <- which(sapply(2:5000, function(n) power_t(d, n)) >= 0.80)[1] + 1
+  cat(sprintf("%6.1f%15.1f%14.1f%15d%15.3f%16.1f\n", d, n_from_z(d), 16/d^2,
+              n_exact, power_t(d, n_exact), pwr.t.test(d = d, power = 0.8)$n))
+}
+cat("\n  Lehr's rule (9.3) is accurate to a sample or two: d=1 needs 16/group,\n")
+cat("  d=0.5 needs 64, d=0.2 needs 400. It instantly exposes 'a small but\n")
+cat("  significant effect with n=4'. `pwr` agrees with the exact formula.\n")
+```
+
+## 2. Post-hoc power is not information
+
+```{r posthoc}
+header("2. Why 'observed power' must never be reported")
+set.seed(901)
+n <- 12
+rec <- t(replicate(400, {
+  a <- rnorm(n, 0.35); b <- rnorm(n)
+  sp <- sqrt(((n-1)*var(a) + (n-1)*var(b)) / (2*n - 2))
+  d_obs <- (mean(a) - mean(b)) / sp
+  c(t.test(a, b, var.equal = TRUE)$p.value, power_t(abs(d_obs), n))
+}))
+cat(sprintf("  Spearman correlation between p-value and 'observed power': %+.4f\n",
+            cor(rec[, 1], rec[, 2], method = "spearman")))
+cat("  It is exactly -1: observed power is a relabelling of the p-value.\n")
+cat("\n  Report instead the MINIMUM DETECTABLE EFFECT of the design you ran:\n")
+for (n in c(4, 6, 10, 20)) {
+  mde <- pwr.t.test(n = n, power = 0.8, sig.level = 0.05)$d
+  cat(sprintf("    n = %3d/group -> 80%% power only for d >= %.2f\n", n, mde))
+}
+```
+
+## 3. Pairing gains and clustering losses, eq. (9.5)-(9.6)
+
+```{r pairing-clustering}
+header("3. Pairing (9.5) and clustering (9.6)")
+n_pairs_needed <- function(d_raw, r, power = 0.8, alpha = 0.05)
+  (qnorm(1 - alpha/2) + qnorm(power))^2 * 2 * (1 - r) / d_raw^2
+cat("  Paired design - subjects needed for 80% power, delta/sigma = 0.5:\n")
+base <- n_pairs_needed(0.5, 0)
+for (r in c(0, 0.3, 0.5, 0.7, 0.9))
+  cat(sprintf("    r = %.1f -> %6.1f pairs (%5.1f%% of the unpaired design)\n",
+              r, n_pairs_needed(0.5, r), 100 * n_pairs_needed(0.5, r) / base))
+cat("\n  Clustered design - multiply by the design effect (9.6):\n")
+n_indep <- n_from_z(0.5)
+cat(sprintf("    independent-observation requirement: %.0f per arm\n", n_indep))
+for (rho in c(0.01, 0.05, 0.20)) for (m in c(10, 100)) {
+  de <- 1 + (m - 1) * rho
+  cat(sprintf("    rho=%.2f, m=%3d obs/cluster: DE=%6.2f -> %8.0f obs = %6.1f clusters\n",
+              rho, m, de, n_indep * de, n_indep * de / m))
+}
+```
+
+## 4. More donors or more cells? Equation (9.7)
+
+```{r allocation}
+header("4. The donors-vs-cells optimum (9.7)")
+optimal_cells <- function(sb, se, c_donor, c_cell) sqrt((se^2 / sb^2) * (c_donor / c_cell))
+variance_at <- function(n, m, sb, se) sb^2 / n + se^2 / (n * m)     # eq. (1.5)
+BUDGET <- 20000; C_DONOR <- 800; C_CELL <- 0.40
+cat(sprintf("  budget = %s; cost per donor = %g, per cell = %g\n\n",
+            format(BUDGET, big.mark = ","), C_DONOR, C_CELL))
+cat(sprintf("%9s%9s%11s%9s%12s%13s\n", "sigma_b", "sigma_e", "m* (9.7)", "n at m*",
+            "Var at m*", "best grid m"))
+grid_m <- 5:4000
+for (cfg in list(c(1, 1), c(1, 2), c(0.5, 2), c(2, 1))) {
+  sb <- cfg[1]; se <- cfg[2]
+  m_star <- optimal_cells(sb, se, C_DONOR, C_CELL)
+  n_star <- BUDGET / (C_DONOR + m_star * C_CELL)
+  n_grid <- BUDGET / (C_DONOR + grid_m * C_CELL)
+  best <- grid_m[which.min(variance_at(n_grid, grid_m, sb, se))]
+  cat(sprintf("%9.1f%9.1f%11.1f%9.1f%12.5f%13d\n", sb, se, m_star, n_star,
+              variance_at(n_star, m_star, sb, se), best))
+}
+cat("\n  The closed form matches the brute-force optimum. Because donor\n")
+cat("  variability is large in human studies, m* is modest and the budget is\n")
+cat("  better spent on MORE DONORS.\n")
+```
+
+## 5. RNA-seq: depth versus replicates, eq. (9.8)-(9.9)
+
+```{r rnaseq-power}
+header("5. Depth cannot substitute for replicates (9.8)-(9.9)")
+n_rnaseq <- function(fc, mu, phi, power = 0.8, alpha = 0.05) {   # eq. (9.9)
+  z <- qnorm(1 - alpha/2) + qnorm(power)
+  2 * z^2 * (1/mu + phi) / log(fc)^2
+}
+PHI <- 0.16
+cat(sprintf("  dispersion phi = %.2f (BCV = %.2f); floor at mu ~ 1/phi = %.1f counts\n\n",
+            PHI, sqrt(PHI), 1/PHI))
+cat(sprintf("%15s%10s%10s%10s\n", "mean count mu", "FC=1.5", "FC=2.0", "FC=3.0"))
+for (mu in c(1, 3, 6, 20, 100, 1000, 10000))
+  cat(sprintf("%15s%10.1f%10.1f%10.1f\n", format(mu, big.mark = ","),
+              n_rnaseq(1.5, mu, PHI), n_rnaseq(2, mu, PHI), n_rnaseq(3, mu, PHI)))
+cat(sprintf("\n  From mu=100 to mu=10,000 (100x more sequencing) the requirement\n"))
+cat(sprintf("  barely moves (%.1f -> %.1f samples). For genuinely low-count genes\n",
+            n_rnaseq(2, 100, PHI), n_rnaseq(2, 10000, PHI)))
+cat("  depth DOES help. So: filter low counts, then spend on replicates.\n")
+
+cat("\n  Verifying eq. (9.9) by simulation (NB Wald test):\n")
+set.seed(902)
+for (cfg in list(c(2, 50), c(1.5, 50))) {
+  fc <- cfg[1]; mu <- cfg[2]
+  n_pred <- ceiling(n_rnaseq(fc, mu, PHI))
+  hits <- mean(replicate(600, {
+    a <- rnbinom(n_pred, mu = mu * fc, size = 1/PHI)
+    b <- rnbinom(n_pred, mu = mu, size = 1/PHI)
+    d <- data.frame(y = c(a, b), g = rep(0:1, each = n_pred))
+    f <- try(MASS::glm.nb(y ~ g, data = d), silent = TRUE)
+    if (inherits(f, "try-error")) NA else coef(summary(f))["g", "Pr(>|z|)"] < 0.05
+  }), na.rm = TRUE)
+  cat(sprintf("    FC=%.1f, mu=%d: eq.(9.9) predicts n=%d -> simulated power = %.2f\n",
+              fc, mu, n_pred, hits))
+}
+```
+
+## 6. Multiplicity burden grows only logarithmically
+
+```{r multiplicity}
+header("6. Genome-wide testing: the cost of multiplicity")
+z_base <- qnorm(1 - 0.05/2) + qnorm(0.8)
+cat(sprintf("%12s%12s%13s%13s\n", "G tests", "alpha/G", "z threshold", "n inflation"))
+for (G in c(1, 20, 1000, 20000, 1e6)) {
+  a <- 0.05 / G; z <- qnorm(1 - a/2) + qnorm(0.8)
+  cat(sprintf("%12s%12.2e%13.3f%12.2fx\n", format(G, big.mark = ","), a,
+              qnorm(1 - a/2), (z / z_base)^2))
+}
+cat("\n  1 test to a million multiplies the required n by only ~5, because n\n")
+cat("  grows with z^2 and z grows like sqrt(log G).\n")
+```
+
+## 7. Simulation-based power, eq. (9.10)
+
+```{r sim-power}
+header("7. Simulation-based power for a clustered design (9.10)")
+simulate_power_clustered <- function(nd, mc, effect, sb = 1, se = 1, n_sim = 500) {
+  hits <- mean(replicate(n_sim, {
+    nb <- 2 * nd
+    b <- rnorm(nb, 0, sb)
+    mu <- b + rep(c(effect, 0), each = nd)
+    cells <- matrix(rnorm(nb * mc, 0, se), nrow = nb) + mu
+    dm <- rowMeans(cells)
+    t.test(dm[seq_len(nd)], dm[-seq_len(nd)])$p.value < 0.05
+  }))
+  c(power = hits, mc_se = sqrt(hits * (1 - hits) / n_sim))
+}
+set.seed(903)
+cat("  effect = 1.0 sigma_b, sigma_e = 1.0\n")
+cat(sprintf("%12s%13s%9s%9s\n", "donors/arm", "cells/donor", "power", "MC SE"))
+for (nd in c(3, 5, 8, 12)) for (mc in c(20, 500)) {
+  r <- simulate_power_clustered(nd, mc, 1.0)
+  cat(sprintf("%12d%13d%9.3f%9.3f\n", nd, mc, r["power"], r["mc_se"]))
+}
+cat("\n  Within a donor count, 20 -> 500 cells changes power very little.\n")
+cat("  Down the donor column it changes a lot. Eq. (1.6), end to end.\n")
+```
+
+## 8. Figure
+
+```{r figure}
+png(file.path(OUT, "power.png"), width = 1300, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+ds <- seq(0.1, 2, length.out = 100)
+plot(NA, xlim = range(ds), ylim = c(0, 1), xlab = "standardised effect d",
+     ylab = "power", main = "Eq. (9.4): exact t power")
+cols <- c("steelblue", "darkorange", "forestgreen", "firebrick")
+for (i in seq_along(c(4, 8, 16, 32)))
+  lines(ds, sapply(ds, power_t, n = c(4, 8, 16, 32)[i]), col = cols[i], lwd = 2)
+abline(h = 0.8, lty = 2)
+legend("bottomright", paste0("n=", c(4, 8, 16, 32), "/group"), col = cols, lwd = 2,
+       bty = "n", cex = 0.7)
+
+mus <- 10^seq(0, 4, length.out = 100)
+plot(NA, xlim = range(mus), ylim = c(1, 500), log = "xy", xlab = "mean count mu",
+     ylab = "samples per group", main = "Eq. (9.9): depth saturates")
+for (i in seq_along(c(1.5, 2, 3)))
+  lines(mus, n_rnaseq(c(1.5, 2, 3)[i], mus, PHI), col = cols[i], lwd = 2)
+abline(v = 1/PHI, lty = 3)
+legend("topright", paste0("FC=", c(1.5, 2, 3)), col = cols[1:3], lwd = 2,
+       bty = "n", cex = 0.7)
+
+plot(NA, xlim = c(5, 4000), ylim = c(1, 3), log = "x", xlab = "cells per donor m",
+     ylab = "Var(mean) / minimum", main = "Eq. (9.7): optimal allocation")
+for (i in seq_along(list(c(1,1), c(0.5,2), c(2,1)))) {
+  cfg <- list(c(1,1), c(0.5,2), c(2,1))[[i]]
+  n_grid <- BUDGET / (C_DONOR + grid_m * C_CELL)
+  v <- variance_at(n_grid, grid_m, cfg[1], cfg[2])
+  lines(grid_m, v / min(v), col = cols[i], lwd = 2)
+  abline(v = optimal_cells(cfg[1], cfg[2], C_DONOR, C_CELL), col = cols[i], lty = 3)
+}
+legend("topleft", c("sb=1,se=1", "sb=0.5,se=2", "sb=2,se=1"), col = cols[1:3],
+       lwd = 2, bty = "n", cex = 0.7)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "power.png"), "\n")
+```
+
+## Decision rules (from `stats.md` Topic 9)
+
+1. Power analysis is PROSPECTIVE. Report the minimum detectable effect.
+2. State every input and show a sensitivity curve.
+3. Spend on biological replicates before depth, cells or technical replicates.
+4. For clustering or non-standard models, simulate (9.10).
+
+**Next:** `10_correlation_and_dependence.R`

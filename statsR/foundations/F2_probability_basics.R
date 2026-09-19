@@ -1,0 +1,345 @@
+#' ---
+#' title: "Foundations 2 - Probability, independence, and conditional probability"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Part 0, §0.4, equations (0.1)-(0.9)
+#' **Assumes:** `F1`.
+#'
+#' ## Why you need this
+#'
+#' Your sample could have come out otherwise. Probability is the mathematics
+#' of "could have come out otherwise", which is why it sits underneath every
+#' p-value, confidence interval and error rate in this course.
+#'
+#' You need surprisingly little of it. This module covers all of it.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "F2_probability_basics"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(102)
+
+#' ## 1. A probability is a long-run frequency
+
+#+ longrun
+header("1. Probability is what happens in the long run")
+flips <- rbinom(20000, 1, 0.5)          # 0 = tails, 1 = heads
+cat(sprintf("  %-26s%20s\n", "after this many flips", "proportion heads"))
+for (n in c(10, 100, 1000, 10000, 20000))
+  cat(sprintf("  %-26s%20.4f\n", format(n, big.mark = ","), mean(flips[1:n])))
+cat("
+  The proportion wanders a lot early on and settles down later. That is all a
+  probability is: the value the proportion settles to.
+
+  Note what it does NOT tell you - whether the next flip is heads. A
+  probability is a statement about a PROCESS repeated, never about a single
+  outcome. That is exactly the distinction that makes confidence intervals and
+  p-values so easy to misread (F5).\n")
+
+#' ## 2. The two combining rules, eq. (0.2)-(0.3)
+
+#+ rules
+header("2. 'or' adds; 'and' multiplies (but only if independent)")
+die <- sample(1:6, 200000, replace = TRUE)
+cat("  OR rule, eq. (0.2) - for outcomes that cannot both happen:\n")
+cat(sprintf("    P(1) = %.4f,  P(2) = %.4f\n", mean(die == 1), mean(die == 2)))
+cat(sprintf("    P(1) + P(2)   = %.4f   <- the rule\n", mean(die == 1) + mean(die == 2)))
+cat(sprintf("    P(1 or 2)     = %.4f   <- simulated\n", mean(die %in% c(1, 2))))
+a <- rbinom(200000, 1, 0.5); b <- rbinom(200000, 1, 0.5)
+cat("\n  AND rule, eq. (0.3) - for INDEPENDENT events:\n")
+cat(sprintf("    P(A heads) = %.4f,  P(B heads) = %.4f\n", mean(a), mean(b)))
+cat(sprintf("    product       = %.4f   <- the rule\n", mean(a)*mean(b)))
+cat(sprintf("    P(both heads) = %.4f   <- simulated\n", mean(a == 1 & b == 1)))
+
+#' ## 3. Independence, and what happens when it fails
+
+#+ independence
+header("3. When independence fails, multiplying gives the wrong answer")
+## Two coins welded together: they always land the same way. Each is still a
+## perfectly fair coin - P(heads) = 0.5 for each, separately.
+welded <- rbinom(200000, 1, 0.5)
+cc <- welded; dd <- welded
+cat("  Two coins that are NOT independent (they always match):\n")
+cat(sprintf("    P(C heads) = %.4f   <- still a fair coin\n", mean(cc)))
+cat(sprintf("    P(D heads) = %.4f   <- still a fair coin\n", mean(dd)))
+cat(sprintf("    product (what eq. 0.3 would give) = %.4f\n", mean(cc)*mean(dd)))
+cat(sprintf("    P(both heads), actually           = %.4f\n", mean(cc == 1 & dd == 1)))
+cat(sprintf("    the rule is wrong by a factor of  %.1fx\n",
+            mean(cc == 1 & dd == 1)/(mean(cc)*mean(dd))))
+cat("
+  Each coin is individually fair. The rule still fails, because the rule was
+  never about the individual coins - it was about their INDEPENDENCE.
+
+  Now scale that up. This is the whole of pseudoreplication.\n")
+
+## Two designs, both producing 120 numbers:
+##   (a) 120 genuinely independent measurements
+##   (b) 6 mice x 20 cells, where the 20 cells from one mouse share that
+##       mouse's own level - so they are NOT independent of each other.
+N_UNITS <- 6; N_SUB <- 20; SD_UNIT <- 1; SD_CELL <- 1; REPS <- 4000
+indep_means <- numeric(REPS); clust_means <- numeric(REPS)
+clust_naive <- numeric(REPS)
+for (i in seq_len(REPS)) {
+  indep_means[i] <- mean(rnorm(N_UNITS*N_SUB, 0, SD_CELL))
+  mouse_level <- rnorm(N_UNITS, 0, SD_UNIT)
+  cells <- rep(mouse_level, each = N_SUB) + rnorm(N_UNITS*N_SUB, 0, SD_CELL)
+  clust_means[i] <- mean(cells)
+  clust_naive[i] <- sd(cells)/sqrt(N_UNITS*N_SUB)
+}
+cat(sprintf("\n  %-40s%6s%22s\n", "design", "rows", "TRUE SD of the mean"))
+cat(sprintf("  %-40s%6d%22.4f\n", "(a) 120 independent measurements",
+            N_UNITS*N_SUB, sd(indep_means)))
+cat(sprintf("  %-40s%6d%22.4f\n", "(b) 6 mice x 20 cells",
+            N_UNITS*N_SUB, sd(clust_means)))
+cat(sprintf("\n  For design (b), what s/sqrt(120) CLAIMS : %8.4f\n", mean(clust_naive)))
+cat(sprintf("  What the uncertainty actually IS       : %8.4f\n", sd(clust_means)))
+cat(sprintf("  The naive formula is too small by      : %8.1fx\n",
+            sd(clust_means)/mean(clust_naive)))
+cat(sprintf("  Treating the MOUSE as the unit gives   : %8.4f\n",
+            sqrt(SD_UNIT^2 + SD_CELL^2/N_SUB)/sqrt(N_UNITS)))
+cat("
+  Both designs produce 120 numbers. Design (b) is far less informative,
+  because its 120 rows contain only 6 independent facts about the population.
+
+  The naive formula divides by sqrt(120) as if there were 120. The last line
+  treats the mouse as the unit and divides by sqrt(6) instead - and that
+  number matches the truth.
+
+  This is not a subtle effect. In exercise E1 it turns p = 0.06 into
+  p = 2e-12. Independence is not a technicality - it is the load-bearing
+  assumption of applied statistics, and eq. (0.3) is where it enters.\n")
+
+#' ## 4. Conditional probability, eq. (0.4)
+
+#+ conditional
+header("4. P(A given B) is not P(B given A)")
+N <- 1000000
+PREVALENCE <- 0.01; SENSITIVITY <- 0.99; SPECIFICITY <- 0.95
+diseased <- runif(N) < PREVALENCE
+positive <- ifelse(diseased, runif(N) < SENSITIVITY, runif(N) < (1 - SPECIFICITY))
+cat(sprintf("  A disease %.0f%% of people have.\n", 100*PREVALENCE))
+cat(sprintf("  A test that is %.0f%% sensitive and %.0f%% specific.\n\n",
+            100*SENSITIVITY, 100*SPECIFICITY))
+cat(sprintf("  %-46s%10s\n", "quantity", "value"))
+cat(sprintf("  %-46s%10.3f\n", "P(test positive | you have it)", mean(positive[diseased])))
+cat(sprintf("  %-46s%10.3f   <- !\n", "P(you have it | test positive)",
+            mean(diseased[positive])))
+cat(sprintf("\n  of %s positive tests, only %s are real cases\n",
+            format(sum(positive), big.mark = ","),
+            format(sum(positive & diseased), big.mark = ",")))
+cat("
+  The test is 99% accurate at detecting the disease, and yet a positive result
+  means you probably do NOT have it. Nothing is wrong with the test. Healthy
+  people vastly outnumber sick ones, so even a small false-positive RATE
+  produces a large NUMBER of false positives.
+
+  This asymmetry - P(A|B) is not P(B|A) - is the most misread idea in
+  statistics, and it is exactly the mistake people make with p-values:
+
+    a p-value is   P(data this extreme | no real effect)
+    people read it P(no real effect | data this extreme)
+
+  Those are as different as the two rows above. F5 returns to this.\n")
+
+#' ## 5. Expectation and variance, eq. (0.5)-(0.7)
+
+#+ moments
+header("5. Expectation (where it sits) and variance (how spread out)")
+MU <- 10; SIGMA <- 3
+x <- rnorm(500000, MU, SIGMA)
+cat(sprintf("  %-40s%-24s%10s\n", "quantity", "formula", "value"))
+cat(sprintf("  %-40s%-24s%10.4f\n", "expected value E[X] = mu", "mean of X", mean(x)))
+cat(sprintf("  %-40s%-24s%10.4f\n", "variance = E[(X - mu)^2]",
+            "mean squared distance", mean((x - MU)^2)))
+cat(sprintf("  %-40s%-24s%10.4f\n", "standard deviation", "sqrt(variance)",
+            sqrt(mean((x - MU)^2))))
+cat(sprintf("
+  Why square the distances (eq. 0.6)? Because without squaring, the positives
+  and negatives cancel exactly:
+
+    mean of (X - mu)     = %9.5f   <- always ~0, useless
+    mean of |X - mu|     = %9.5f   <- works, but awkward algebra
+    mean of (X - mu)^2   = %9.5f   <- the variance
+
+  Squaring makes the units wrong (squared grams), so we take the square root
+  at the end and get the STANDARD DEVIATION - a spread in the original units.
+
+  Rule of thumb for a bell-shaped variable: about 68%% of values fall within
+  1 SD of the mean and 95%% within 2 SD. Check it:
+    within 1 SD: %.1f%%
+    within 2 SD: %.1f%%\n",
+  mean(x - MU), mean(abs(x - MU)), mean((x - MU)^2),
+  100*mean(abs(x - MU) < SIGMA), 100*mean(abs(x - MU) < 2*SIGMA)))
+
+#' ## 6. The variance rule that explains everything, eq. (0.9)
+
+#+ varsum
+header("6. Variances add - for independent things (0.9)")
+n <- 200000
+X <- rnorm(n); Y <- rnorm(n); Z <- X
+cat(sprintf("  %-34s%16s%18s\n", "", "Var(X)+Var(Y)", "Var(X+Y) actual"))
+cat(sprintf("  %-34s%16.4f%18.4f\n", "X, Y independent", var(X) + var(Y), var(X + Y)))
+cat(sprintf("  %-34s%16.4f%18.4f   <- rule fails\n", "X, Z identical (dependent)",
+            var(X) + var(Z), var(X + Z)))
+cat("\n  Now the consequence. Average n independent values and the variance\n")
+cat("  of the average is divided by n, so its SD is divided by sqrt(n):\n\n")
+cat(sprintf("  %-8s%18s%20s%16s\n", "n", "SD of one value", "SD of the average",
+            "sigma/sqrt(n)"))
+for (k in c(1, 4, 16, 64, 256)) {
+  avgs <- replicate(20000, mean(rnorm(k)))
+  cat(sprintf("  %-8d%18.4f%20.4f%16.4f\n", k, 1, sd(avgs), 1/sqrt(k)))
+}
+cat("
+  The last two columns match. That is eq. (0.11), the STANDARD ERROR, and it
+  falls straight out of eq. (0.9).
+
+  Two consequences worth carrying with you:
+
+    * To halve your uncertainty you must QUADRUPLE your sample. Precision is
+      expensive, and gets more expensive the more you have.
+
+    * The rule required INDEPENDENCE. If your n values are 20 cells from each
+      of 6 mice, the variance does not divide by 120, and dividing by 120
+      anyway is exactly the error in section 3.
+
+  Everything in F4 is this table.\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "probability_basics.png"), width = 1250, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.4, 4.4, 2.6, 1))
+running <- cumsum(flips)/seq_along(flips)
+plot(running, type = "l", log = "x", col = "steelblue", ylim = c(0, 1),
+     xlab = "number of flips", ylab = "proportion heads",
+     main = "A probability is a long-run frequency")
+abline(h = 0.5, col = "firebrick", lty = 2, lwd = 1.5)
+barplot(c(sum(positive & diseased), sum(positive & !diseased)),
+        names.arg = c("true\npositives", "false\npositives"),
+        col = c("seagreen", "firebrick"), ylab = "people testing positive",
+        main = sprintf("P(disease | positive) = %.2f", mean(diseased[positive])))
+ks <- c(1, 2, 4, 8, 16, 32, 64, 128, 256)
+sds <- sapply(ks, function(k) sd(replicate(8000, mean(rnorm(k)))))
+plot(ks, sds, type = "b", pch = 16, log = "xy", col = "steelblue",
+     xlab = "n averaged", ylab = "SD of the average",
+     main = "Eq. (0.9) => eq. (0.11)")
+lines(ks, 1/sqrt(ks), col = "firebrick", lty = 2, lwd = 2)
+legend("bottomleft", c("simulated", "sigma/sqrt(n)"),
+       col = c("steelblue", "firebrick"), lty = c(1, 2), lwd = 2, bty = "n", cex = 0.75)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "probability_basics.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: The base rate
+
+#+ problem1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# cat(sprintf("  %-14s%18s%18s\n", "prevalence", "P(pos | disease)", "P(disease | pos)"))
+# for (prev in c(0.001, 0.01, 0.10, 0.30, 0.60)) {
+#   dis <- runif(400000) < prev
+#   pos <- ifelse(dis, runif(400000) < 0.99, runif(400000) < 0.05)
+#   cat(sprintf("  %-13.1f%%%18.3f%18.3f\n", 100*prev, mean(pos[dis]), mean(dis[pos])))
+# }
+#
+# ## The middle column never moves: the TEST has not changed. The right column
+# ## swings from almost 0 to almost 1, purely because of how common the disease
+# ## is in the population being tested.
+# ##
+# ## The same test is nearly useless for screening the general population and
+# ## very informative in a high-risk clinic. This is why screening programmes
+# ## target risk groups, and why "the test is 99% accurate" means nothing on
+# ## its own.
+# ##
+# ## The statistical version: your interpretation of a positive RESULT depends
+# ## on how plausible the thing was BEFORE you tested. That is Bayes' theorem,
+# ## and it is why p = 0.04 means something quite different for a
+# ## pre-registered hypothesis than for the 500th gene you looked at.
+
+#' ### Problem 2: How much does dependence cost you?
+
+#+ problem2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# n_groups <- 6; per_group <- 20
+# cat(sprintf("  %-12s%8s%18s%20s%14s\n", "group SD", "ICC",
+#             "true SD of mean", "naive s/sqrt(120)", "too small by"))
+# for (sd_group in c(0, 0.3, 0.7, 1.5)) {
+#   tr <- numeric(2000); nv <- numeric(2000)
+#   for (i in 1:2000) {
+#     g <- rnorm(n_groups, 0, sd_group)
+#     y <- rep(g, each = per_group) + rnorm(n_groups*per_group, 0, 1)
+#     tr[i] <- mean(y); nv[i] <- sd(y)/sqrt(length(y))
+#   }
+#   icc <- sd_group^2/(sd_group^2 + 1)
+#   cat(sprintf("  %-12.1f%8.2f%18.4f%20.4f%13.1fx\n", sd_group, icc,
+#               sd(tr), mean(nv), sd(tr)/mean(nv)))
+# }
+#
+# ## With no group effect the two columns agree - the 120 values really are
+# ## independent. As the group effect grows they diverge fast, and the naive
+# ## formula understates the uncertainty several-fold.
+# ##
+# ## The ICC column is the fraction of total variance that lives BETWEEN
+# ## groups. Even an ICC of 0.1 - which sounds negligible - does real damage,
+# ## because the penalty depends on the GROUP SIZE too: it is 1 + (m-1) x ICC,
+# ## the "design effect" of eq. (1.8). With m = 20 cells per mouse, an ICC of
+# ## 0.1 means each mouse contributes about a third of what you thought.
+# ##
+# ## The fix is never a better formula. It is to analyse at the level of the
+# ## unit you randomised (F1, Problem 3) or to model the grouping explicitly
+# ## with a mixed model (Topic 14).
+
+#' ### Problem 3: Does the rule of thumb survive a skewed variable?
+
+#+ problem3
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# normal_x <- rnorm(200000, 100, 20)
+# skewed_x <- rlnorm(200000, log(100), 0.9)
+# cat(sprintf("  %-22s%9s%9s%14s%14s%16s\n", "variable", "mean", "median",
+#             "within 1 SD", "within 2 SD", "below the mean"))
+# for (nm in c("normal", "skewed (lognormal)")) {
+#   v <- if (nm == "normal") normal_x else skewed_x
+#   m <- mean(v); s <- sd(v)
+#   cat(sprintf("  %-22s%9.1f%9.1f%13.1f%%%13.1f%%%15.1f%%\n", nm, m, median(v),
+#               100*mean(abs(v - m) < s), 100*mean(abs(v - m) < 2*s), 100*mean(v < m)))
+# }
+# lv <- log(skewed_x); m <- mean(lv); s <- sd(lv)
+# cat("\n  after taking logs of the skewed variable:\n")
+# cat(sprintf("  %-22s%9.1f%9.1f%13.1f%%%13.1f%%%15.1f%%\n", "log(skewed)", m,
+#             median(lv), 100*mean(abs(lv - m) < s), 100*mean(abs(lv - m) < 2*s),
+#             100*mean(lv < m)))
+#
+# ## For the skewed variable the rule of thumb breaks, and note the last
+# ## column: far MORE than half the values sit below the mean. A few large
+# ## values drag the mean above the typical value, so "the average expression"
+# ## is not a description of a typical gene.
+# ##
+# ## Taking logs restores the bell shape, and with it the rule of thumb and the
+# ## entire standard toolkit. This is why expression, concentrations and
+# ## survival times are analysed on a log scale - not tradition, but because
+# ## the log turns multiplicative, skewed variation into additive, symmetric
+# ## variation. Topic 2 covers when a transformation is appropriate and what it
+# ## does to the interpretation of your effect size.
+
+#' ## What to take away
+#'
+#' 1. A probability is a **long-run frequency**, never a statement about one
+#'    outcome.
+#' 2. "Or" adds; "and" multiplies **only under independence**.
+#' 3. **Independence is the assumption biology breaks**, and eq. (0.3) is
+#'    where the damage begins.
+#' 4. $P(A \mid B) \neq P(B \mid A)$ - the p-value misreading.
+#' 5. Variance is the average **squared** distance from the mean.
+#' 6. Variances **add for independent things**: which is why averaging works
+#'    and why $\mathrm{SE} = \sigma/\sqrt{n}$.
+#'
+#' **Next:** `F3_distributions.R`

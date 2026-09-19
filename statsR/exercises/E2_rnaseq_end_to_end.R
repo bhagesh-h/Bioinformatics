@@ -1,0 +1,493 @@
+#' ---
+#' title: "Exercise 2 - A differential expression analysis, end to end"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topics 8, 13, 20, 29
+#' **Core modules used:** 08, 13, 20, 30, 39
+#'
+#' ## The brief
+#'
+#' You are handed a raw count matrix: 12 samples (6 control, 6 treated).
+#' Nobody tells you how it was made. Build the analysis yourself and, at every
+#' step, **check the step rather than trusting it**.
+#'
+#' | Q | Step | The thing that goes wrong |
+#' |---|---|---|
+#' | 1 | Normalisation | composition bias - a few huge genes distort every library |
+#' | 2 | Dispersion | per-gene estimates are hopeless at n = 6 |
+#' | 3 | Testing + FDR | the test is fine; calibration and filtering are not |
+#' | 4 | Enrichment | inter-gene correlation inflates set-level p-values |
+#' | 5 | Negative control | does the whole pipeline return nothing on a null? |
+#'
+#' Question 5 matters most and is the one almost nobody runs.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages(library(MASS))
+MODULE_NAME <- "E2_rnaseq_end_to_end"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## The data
+
+#+ data
+make_counts <- function(seed = 7, n_per_group = 6, n_genes = 2500, n_de = 200,
+                        composition_bias = TRUE) {
+  set.seed(seed)
+  n <- 2*n_per_group
+  group <- rep(0:1, each = n_per_group)
+  ## True expression level per gene, log-normal as real data are.
+  base <- exp(rnorm(n_genes, 4.0, 1.6))
+  ## Mean-dispersion trend: low-count genes are much noisier (eq. 20.3).
+  disp <- 0.10 + 18.0/(base + 12.0)
+  lfc <- numeric(n_genes)
+  de_idx <- sample(n_genes, n_de)
+  lfc[de_idx] <- rnorm(n_de, 0, 1.1)
+  ## Correlated modules: each responds to the processing BATCH plus a smaller
+  ## unmeasured latent factor. Both move all of a module's genes together,
+  ## which is what makes genes in a pathway non-independent.
+  ##
+  ## Batch is balanced within each group, so it is NOT confounded with
+  ## treatment - but leaving it out of the design still inflates error rates.
+  batch <- rep(rep(0:1, length.out = n_per_group), 2)
+  n_mod <- 10; mod_size <- 50
+  modules <- list()
+  mod_factor <- matrix(0, n_genes, n)
+  for (k in seq_len(n_mod)) {
+    members <- ((k - 1)*mod_size + 1):(k*mod_size)
+    modules[[sprintf("module_%02d", k)]] <- members
+    mod_factor[members, ] <- rep(rnorm(1, 0, 0.55)*batch + rnorm(n, 0, 0.18),
+                                 each = length(members))
+  }
+  ## Modules 1 and 2 are genuinely up-regulated; the rest are not.
+  for (k in 1:2) {
+    lfc[modules[[k]]] <- rnorm(mod_size, 0.9, 0.25)
+    de_idx <- union(de_idx, modules[[k]])
+  }
+  lib <- runif(n, 0.5, 2.0)                    # library size varies 4-fold
+  mu <- outer(base, rep(1, n)) * 2^outer(lfc, group) * exp(mod_factor) *
+        rep(lib, each = n_genes)
+  if (composition_bias) {
+    ## 5 genes explode in the treated group: real biology, but it steals
+    ## sequencing depth from every other treated gene.
+    hogs <- order(base, decreasing = TRUE)[1:5]
+    mu[hogs, group == 1] <- mu[hogs, group == 1]*60
+  }
+  ## Sequencing measures PROPORTIONS: renormalise each column to a fixed total.
+  mu <- sweep(mu, 2, colSums(mu), "/") * rep(4e6*lib, each = n_genes)
+  counts <- matrix(rnbinom(n_genes*n, size = 1/disp, mu = mu), n_genes)
+  list(counts = counts, group = group, batch = batch, lfc_true = lfc,
+       is_de = seq_len(n_genes) %in% de_idx, modules = modules,
+       disp_true = disp, base = base)
+}
+header("The count matrix as received")
+D <- make_counts()
+counts <- D$counts; group <- D$group; batch <- D$batch
+cat(sprintf("  %d genes x %d samples (%d control, %d treated)\n",
+            nrow(counts), ncol(counts), sum(group == 0), sum(group == 1)))
+cat(sprintf("  library sizes (millions): %s\n",
+            paste(round(colSums(counts)/1e6, 2), collapse = " ")))
+cat(sprintf("  ratio largest/smallest library = %.2f\n",
+            max(colSums(counts))/min(colSums(counts))))
+cat(sprintf("  median count %.0f, max count %s\n", median(counts),
+            format(max(counts), big.mark = ",")))
+cat(sprintf("  group : %s\n  batch : %s   <- recorded, balanced within group\n",
+            paste(group, collapse = " "), paste(batch, collapse = " ")))
+
+#' ### Q1: Normalisation
+#'
+#' Compare total-count (CPM), upper-quartile and median-of-ratios size factors
+#' (eq. 20.1). Which recovers the truth, and how would you *detect* the
+#' problem without knowing the truth?
+
+#+ q1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sf_total <- function(c) { s <- colSums(c); s/exp(mean(log(s))) }
+# sf_uq <- function(c) {
+#   q <- apply(c, 2, function(x) quantile(x[x > 0], 0.75))
+#   q/exp(mean(log(q)))
+# }
+# sf_median_ratio <- function(c) {
+#   ## DESeq2 median-of-ratios (eq. 20.1). The geometric mean across samples is
+#   ## a per-gene REFERENCE; a sample's size factor is the median of its ratios
+#   ## to that reference. Because it is a MEDIAN, a handful of exploding genes
+#   ## cannot move it.
+#   keep <- apply(c > 0, 1, all)          # the geometric mean needs no zeros
+#   lc <- log(c[keep,, drop = FALSE])
+#   exp(apply(lc - rowMeans(lc), 2, median))
+# }
+# sfs <- list("total count (CPM)" = sf_total(counts),
+#             "upper quartile" = sf_uq(counts),
+#             "median of ratios" = sf_median_ratio(counts))
+# cat(sprintf("  %-22s%11s%11s%11s\n", "method", "ctrl mean", "trt mean", "trt/ctrl"))
+# for (nm in names(sfs)) {
+#   s <- sfs[[nm]]
+#   cat(sprintf("  %-22s%11.3f%11.3f%11.3f\n", nm, mean(s[group == 0]),
+#               mean(s[group == 1]), mean(s[group == 1])/mean(s[group == 0])))
+# }
+# nde <- !D$is_de
+# cat(sprintf("\n  %-22s%32s\n", "method", "median logFC of NON-DE genes"))
+# for (nm in names(sfs)) {
+#   norm <- sweep(counts, 2, sfs[[nm]], "/")
+#   a <- log2(rowMeans(norm[nde, group == 1]) + 1)
+#   b <- log2(rowMeans(norm[nde, group == 0]) + 1)
+#   cat(sprintf("  %-22s%32.3f\n", nm, median(a - b)))
+# }
+# ## DIAGNOSIS WITHOUT THE TRUTH: check what share of each library the top
+# ## genes consume.
+# frac <- apply(counts, 2, function(x) sum(sort(x, decreasing = TRUE)[1:5])/sum(x))
+# cat(sprintf("\n  share of library taken by the top 5 genes:\n"))
+# cat(sprintf("    control : %.1f%%\n    treated : %.1f%%   <- composition bias\n",
+#             100*mean(frac[group == 0]), 100*mean(frac[group == 1])))
+#
+# ## Total-count normalisation divides by a number the 5 exploding genes
+# ## dominate, so every OTHER treated gene is scaled down and looks
+# ## DOWN-regulated: the median non-DE logFC moves away from 0. Median-of-ratios
+# ## and upper-quartile are robust to a few enormous genes and keep it near 0.
+# ## This is why DESeq2/edgeR never use CPM for testing, and why "normalise to
+# ## total reads" is wrong whenever composition changes - the same closure
+# ## problem as microbiome data (Topic 26).
+
+#' ### Q2: Dispersion
+#'
+#' Estimate the NB dispersion per gene by method of moments, then shrink it
+#' towards a fitted mean-dispersion trend (eq. 20.4). Show numerically why the
+#' raw per-gene estimate must not be used at n = 6.
+
+#+ q2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sf <- sf_median_ratio(counts)
+# norm <- sweep(counts, 2, sf, "/")
+# keep <- rowMeans(norm) >= 1        # keep almost everything; Q3 studies filtering
+# nrm <- norm[keep,, drop = FALSE]; dtrue <- D$disp_true[keep]
+# mu_hat <- rowMeans(nrm)
+# var_hat <- apply(nrm, 1, var)
+# ## NB: Var = mu + disp*mu^2  ->  disp = (Var - mu)/mu^2   (eq. 20.2)
+# disp_mom <- pmax((var_hat - mu_hat)/mu_hat^2, 1e-4)
+# ## Trend: dispersion as a smooth function of the mean (eq. 20.3), in log space.
+# o <- order(mu_hat)
+# sm <- stats::filter(log(disp_mom[o]), rep(1/151, 151), sides = 2)
+# sm[is.na(sm)] <- log(disp_mom[o])[is.na(sm)]
+# disp_trend <- numeric(length(disp_mom)); disp_trend[o] <- exp(sm)
+# ## Empirical-Bayes shrinkage towards the trend (eq. 20.4). The weight depends
+# ## on the residual degrees of freedom, n - 2 = 10 here. trigamma(df/2) is the
+# ## sampling variance of a log-variance estimate - NOT 2/df.
+# dfres <- ncol(counts) - 2
+# logres <- log(disp_mom) - log(disp_trend)
+# prior_var <- max(var(logres) - trigamma(dfres/2), 0.01)
+# wt <- prior_var/(prior_var + trigamma(dfres/2))
+# disp_shrunk <- exp(log(disp_trend) + wt*logres)
+# cat(sprintf("  %d genes kept (mean normalised count >= 1)\n", sum(keep)))
+# cat(sprintf("  residual df = %d, shrinkage weight towards the trend = %.2f\n",
+#             dfres, 1 - wt))
+# cat(sprintf("\n  %-26s%18s%18s\n", "estimator", "corr with truth", "median |error|"))
+# for (nm in list(c("per-gene MoM", "disp_mom"), c("trend only", "disp_trend"),
+#                 c("shrunk (empirical Bayes)", "disp_shrunk"))) {
+#   est <- get(nm[2])
+#   cat(sprintf("  %-26s%18.3f%18.3f\n", nm[1], cor(log(est), log(dtrue)),
+#               median(abs(log(est) - log(dtrue)))))
+# }
+#
+# ## With 10 residual degrees of freedom a variance estimate has a relative
+# ## standard error of about sqrt(2/10) = 45%, so the per-gene dispersion is
+# ## extremely noisy - and worst exactly where it hurts, in the low-count genes.
+# ## Shrinking each gene towards a trend fitted across thousands of genes
+# ## borrows strength (Topic 33) and is the single reason DESeq2/edgeR work at
+# ## n = 3-6.
+
+#' ### Q3: Testing, calibration and FDR
+#'
+#' Fit a negative-binomial GLM per gene with a size-factor offset. Check
+#' whether the TEST is calibrated before trusting the FDR, then show what
+#' independent filtering buys.
+
+#+ q3
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# kept_idx <- which(keep)
+# truth_kept <- D$is_de[kept_idx]
+# in_mod <- kept_idx %in% unlist(D$modules)
+# off <- log(sf)
+# fit_all <- function(use_batch, test = c("lrt", "wald")) {
+#   test <- match.arg(test)
+#   p <- rep(1, length(kept_idx)); lfc <- numeric(length(kept_idx))
+#   for (i in seq_along(kept_idx)) {
+#     yv <- counts[kept_idx[i], ]
+#     fam <- MASS::negative.binomial(theta = 1/disp_shrunk[i])
+#     d1 <- if (use_batch) data.frame(yv, group, batch) else data.frame(yv, group)
+#     f1 <- try(glm(yv ~ ., fam, data = d1, offset = off), silent = TRUE)
+#     if (inherits(f1, "try-error")) next
+#     lfc[i] <- coef(f1)["group"]/log(2)
+#     if (test == "wald") {
+#       ## dispersion = 1 is ESSENTIAL: negative.binomial() is not on
+#       ## summary.glm's "known dispersion" list, so by default summary()
+#       ## estimates an EXTRA scale parameter and switches to a t reference.
+#       p[i] <- coef(summary(f1, dispersion = 1))["group", 4]
+#     } else {
+#       d0 <- if (use_batch) data.frame(yv, batch) else data.frame(yv)
+#       f0 <- try(glm(yv ~ ., fam, data = d0, offset = off), silent = TRUE)
+#       if (inherits(f0, "try-error")) next
+#       p[i] <- pchisq(f0$deviance - f1$deviance, 1, lower.tail = FALSE)
+#     }
+#   }
+#   list(p = p, lfc = lfc)
+# }
+# ## --- (a) Is the TEST calibrated? Measure the null p-value rate directly. ---
+# cat("  Rate of p < 0.05 among genes with NO true effect (should be 0.05):\n\n")
+# cat(sprintf("  %-20s%-8s%12s%12s%12s\n", "design", "test", "all nulls",
+#             "in module", "elsewhere"))
+# cal <- list()
+# for (dn in c("~ group", "~ group + batch")) {
+#   for (tn in c("wald", "lrt")) {
+#     r <- fit_all(use_batch = (dn == "~ group + batch"), test = tn)
+#     cal[[paste(dn, tn)]] <- r
+#     nul <- !truth_kept
+#     cat(sprintf("  %-20s%-8s%12.4f%12.4f%12.4f\n", dn, toupper(tn),
+#                 mean(r$p[nul] < 0.05), mean(r$p[nul & in_mod] < 0.05),
+#                 mean(r$p[nul & !in_mod] < 0.05)))
+#   }
+# }
+# ## WALD is anticonservative here and the LRT is closer to nominal. A Wald test
+# ## uses the curvature of the likelihood AT THE ESTIMATE; with 12 samples that
+# ## quadratic approximation is poor and it errs towards small p-values (the
+# ## extreme case is the Hauck-Donner effect, Topic 13). Prefer the LRT at small
+# ## n - it is what edgeR's glmLRT does.
+# ##
+# ## Also note that module genes are only modestly worse than the rest (about
+# ## 0.087 vs 0.069), despite carrying a whole extra source of variation. The
+# ## dispersion was estimated FROM THESE DATA, so the batch-driven spread inside
+# ## each module was absorbed into a larger per-gene dispersion. Unmodelled
+# ## structure gets LAUNDERED into the variance estimate. That protects the type
+# ## I error - and costs POWER, since real effects in those genes are now tested
+# ## against an inflated variance.
+#
+# ## --- (b) Independent filtering, using the best-calibrated test. ---
+# best <- cal[["~ group + batch lrt"]]
+# pvals <- best$p
+# report <- function(name, mask) {
+#   q <- rep(1, length(pvals)); q[mask] <- p.adjust(pvals[mask], "BH")
+#   disc <- q < 0.05
+#   cat(sprintf("  %-36s%8d%9d%8.3f%8.3f\n", name, sum(mask), sum(disc),
+#               sum(disc & !truth_kept)/max(sum(disc), 1),
+#               sum(disc & truth_kept)/sum(truth_kept)))
+# }
+# cat(sprintf("\n  %-36s%8s%9s%8s%8s\n", "analysis (LRT, ~ group + batch)",
+#             "tested", "discov.", "FDP", "power"))
+# report("no filtering", rep(TRUE, length(pvals)))
+# for (th in c(5, 30, 100)) report(sprintf("independent filter: mean >= %d", th),
+#                                  mu_hat >= th)
+#
+# ## Filtering barely changes anything here, and the reason is worth knowing:
+# ## this simulation has very few genes near zero - about 1% below a mean count
+# ## of 5 - so there is almost nothing to remove. In real RNA-seq 30-50% of
+# ## annotated genes are effectively unexpressed in any given tissue, and
+# ## dropping them removes a third or more of the multiplicity burden for free.
+# ## That is where independent filtering earns its keep.
+# ##
+# ## What the table DOES show is that filtering does not break anything: FDP and
+# ## power stay flat as the threshold rises, until it climbs high enough to
+# ## start discarding real signal and power falls.
+# ##
+# ## It is legitimate only because mean count is independent of the p-value
+# ## under the null. Filter on the observed fold change instead and FDR control
+# ## collapses - the adjective in "INDEPENDENT filtering" is load-bearing.
+# ##
+# ## Finally, note the realised FDP sits above the nominal 0.05. BH controls the
+# ## EXPECTED FDP over repeated experiments, not the FDP of your one gene list,
+# ## and a mildly liberal test plus correlated genes pushes a single realisation
+# ## up. Calibration is something to CHECK, not assume.
+
+#' ### Q4: Enrichment on your own result
+#'
+#' Test each module for enrichment, naively and with a CAMERA-style variance
+#' inflation factor (eq. 29.5). Two modules are genuinely up-regulated.
+
+#+ q4
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# ## Work on a z-scale: turn each gene's p-value and sign into a z.
+# z <- sign(best$lfc)*qnorm(pmax(pvals, 1e-300)/2, lower.tail = FALSE)
+# logn <- log2(norm[kept_idx,, drop = FALSE] + 1)
+# gene_pos <- setNames(seq_along(kept_idx), kept_idx)
+# set_test <- function(members) {
+#   idx <- gene_pos[as.character(intersect(members, kept_idx))]
+#   idx <- idx[!is.na(idx)]
+#   if (length(idx) < 10) return(NULL)
+#   m <- length(idx); zs <- z[idx]
+#   ## Naive: assumes the m genes are independent.
+#   t_naive <- mean(zs)/(sd(z)/sqrt(m))
+#   ## CAMERA: estimate the mean inter-gene correlation from residuals and
+#   ## inflate the variance by VIF = 1 + (m-1)*rhobar (eq. 29.5).
+#   sub <- logn[idx,, drop = FALSE]
+#   resid <- sub - rowMeans(sub)
+#   resid <- resid/(apply(resid, 1, sd) + 1e-9)
+#   Cm <- cor(t(resid))
+#   rho_bar <- (sum(Cm) - m)/(m*(m - 1))
+#   vif <- 1 + (m - 1)*rho_bar
+#   list(m = m, rho = rho_bar, vif = vif,
+#        p_naive = 2*pnorm(abs(t_naive), lower.tail = FALSE),
+#        p_cam = 2*pnorm(abs(t_naive/sqrt(max(vif, 1e-6))), lower.tail = FALSE))
+# }
+# cat(sprintf("  %-12s%6s%10s%8s%12s%12s%8s\n", "module", "size", "rho-bar",
+#             "VIF", "naive p", "CAMERA p", "truth"))
+# rows <- list()
+# for (nm in names(D$modules)) {
+#   r <- set_test(D$modules[[nm]])
+#   if (is.null(r)) next
+#   tr <- if (nm %in% c("module_01", "module_02")) "UP" else "-"
+#   rows[[nm]] <- c(r$p_naive, r$p_cam, tr == "UP")
+#   cat(sprintf("  %-12s%6d%10.3f%8.1f%12.2e%12.2e%8s\n", nm, r$m, r$rho,
+#               r$vif, r$p_naive, r$p_cam, tr))
+# }
+# R <- do.call(rbind, rows); thresh <- 0.05/nrow(R)
+# cat(sprintf("\n  Bonferroni over %d sets:\n", nrow(R)))
+# cat(sprintf("    naive : %d significant, %d of them FALSE\n",
+#             sum(R[, 1] < thresh), sum(R[, 1] < thresh & R[, 3] == 0)))
+# cat(sprintf("    CAMERA: %d significant, %d of them FALSE\n",
+#             sum(R[, 2] < thresh), sum(R[, 2] < thresh & R[, 3] == 0)))
+#
+# ## Every module is internally correlated by construction, so the naive test -
+# ## which divides by sqrt(m) as if the genes were independent - understates the
+# ## variance of the set mean and can fire on modules with no true signal.
+# ## Dividing by sqrt(VIF) restores calibration, at the cost of some power.
+# ## This is the SAME correction as the design effect in E1: correlated genes
+# ## and correlated cells are one problem wearing two hats.
+
+#' ### Q5: The negative control
+#'
+#' Run the pipeline on **permuted** group labels. A correct pipeline finds
+#' essentially nothing - but only if the permutation respects the structure.
+
+#+ q5
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# ## Permutation is expensive: every run refits two GLMs per gene. Use a random
+# ## subset of genes - the discovery COUNT scales with it, but the comparison
+# ## between permutation schemes, which is what we care about, does not.
+# set.seed(3)
+# perm_genes <- sort(sample(length(kept_idx), 700))
+# pipeline <- function(labels, use_batch) {
+#   p <- rep(1, length(perm_genes))
+#   for (j in seq_along(perm_genes)) {
+#     i <- perm_genes[j]; yv <- counts[kept_idx[i], ]
+#     fam <- MASS::negative.binomial(theta = 1/disp_shrunk[i])
+#     d1 <- if (use_batch) data.frame(yv, g = labels, batch) else data.frame(yv, g = labels)
+#     d0 <- if (use_batch) data.frame(yv, batch) else data.frame(yv)
+#     f1 <- try(glm(yv ~ ., fam, data = d1, offset = off), silent = TRUE)
+#     f0 <- try(glm(yv ~ ., fam, data = d0, offset = off), silent = TRUE)
+#     if (inherits(f1, "try-error") || inherits(f0, "try-error")) next
+#     p[j] <- pchisq(f0$deviance - f1$deviance, 1, lower.tail = FALSE)
+#   }
+#   sum(p.adjust(p, "BH") < 0.05)
+# }
+# permute_free <- function() sample(group)
+# permute_within_batch <- function() {
+#   ## Shuffle labels WITHIN each batch, so the permuted design stays balanced
+#   ## with respect to batch - the only valid null here.
+#   lab <- group
+#   for (b in unique(batch)) lab[batch == b] <- sample(group[batch == b])
+#   lab
+# }
+# n_real <- pipeline(group, TRUE)
+# cat(sprintf("  real labels, design ~ group + batch : %d discoveries among %d genes\n\n",
+#             n_real, length(perm_genes)))
+# cat(sprintf("  %-24s%-18s%7s%6s  runs\n", "permutation scheme", "design",
+#             "mean", "max"))
+# for (pn in c("free (ignores batch)", "within batch")) {
+#   pf <- if (pn == "within batch") permute_within_batch else permute_free
+#   for (dn in c("~ group", "~ group + batch")) {
+#     hits <- replicate(6, pipeline(pf(), dn == "~ group + batch"))
+#     cat(sprintf("  %-24s%-18s%7.1f%6d  %s\n", pn, dn, mean(hits), max(hits),
+#                 paste(hits, collapse = " ")))
+#   }
+# }
+#
+# ## Read these against the discoveries the REAL labels produce. Every scheme
+# ## collapses to a handful of genes, so the pipeline passes its negative
+# ## control: it is not manufacturing signal out of nothing. That is the first
+# ## thing to establish, and most published pipelines never establish it.
+# ##
+# ## Read the rows against each other. One is clearly the worst: permuting
+# ## freely AND leaving batch out of the design. Fixing EITHER of those -
+# ## permuting within batch, or putting batch in the design - brings it back
+# ## down, and doing both is no better than doing one. The nuisance structure
+# ## has to be accounted for somewhere; it does not much matter where. The
+# ## differences are modest here only because batch was balanced within group
+# ## by design; under a confounded design (E1) they would not be.
+# ##
+# ## Look at the MAXIMUM, not just the mean. Most permutations return zero, but
+# ## the occasional one returns several - those are the runs where the shuffled
+# ## labels lined up with batch. A negative control must be run MANY times: one
+# ## permutation returning 0 proves nothing.
+# ##
+# ## Two rules worth keeping:
+# ##   * permute within the strata that structure the data (batch, subject,
+# ##     litter, plate) - the exchangeability rule from Module 07;
+# ##   * put known nuisance variables in the DESIGN.
+
+#' ## Debrief
+
+#+ debrief
+header("The generative truth")
+cat(sprintf("  %d of %d genes are truly differential.\n", sum(D$is_de), nrow(counts)))
+cat("  Dispersion follows 0.10 + 18/(mean + 12): low-count genes are far noisier.
+  Modules 01 and 02 (50 genes each) are genuinely up-regulated; modules 03-10
+  are correlated but NOT differential - they exist to catch a naive set test.
+  All 10 modules respond to the processing BATCH, which is recorded and
+  balanced within each arm - so it biases nothing, but it correlates genes and
+  must appear in the design and in any permutation scheme.
+  5 very high-expression genes are multiplied 60x in the treated group, which
+  is real biology but creates composition bias in the total-count normaliser.
+
+  The pipeline in order, and what each step protects you from:
+
+    normalisation  -> composition bias (a median-based factor, never CPM)
+    dispersion     -> the impossibility of estimating variance at n = 6
+    testing        -> the mean-variance relationship of counts (NB, not t)
+    filtering      -> multiplicity burden from genes with no power
+    enrichment     -> inter-gene correlation (eq. 29.5 = eq. 1.8)
+    permutation    -> everything you forgot\n")
+
+png(file.path(OUT, "rnaseq_pipeline.png"), width = 1250, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.4, 4.4, 2.6, 1))
+barplot(colSums(counts)/1e6, col = c("steelblue", "darkorange")[group + 1],
+        xlab = "sample", ylab = "library size (millions)",
+        main = "Library sizes vary 4-fold")
+mu_p <- rowMeans(counts) + 1; var_p <- apply(counts, 1, var) + 1
+plot(mu_p, var_p, pch = 16, cex = 0.25, col = adjustcolor("grey40", 0.4),
+     log = "xy", xlab = "mean count", ylab = "variance",
+     main = "Counts are overdispersed (eq. 20.2)")
+gx <- 10^seq(0, 5, length.out = 50)
+lines(gx, gx, lty = 2); lines(gx, gx + 0.3*gx^2, col = "firebrick", lwd = 2)
+legend("topleft", c("Poisson (Var = mean)", "NB, disp = 0.3"),
+       lty = c(2, 1), col = c("black", "firebrick"), lwd = c(1, 2), bty = "n",
+       cex = 0.7)
+frac <- apply(counts, 2, function(x) sum(sort(x, decreasing = TRUE)[1:5])/sum(x))
+barplot(100*frac, col = c("steelblue", "darkorange")[group + 1],
+        xlab = "sample", ylab = "% of library, top 5 genes",
+        main = "Composition bias")
+invisible(dev.off())
+cat("Figure written to", file.path(OUT, "rnaseq_pipeline.png"), "\n")
+
+#' ## What to take away
+#'
+#' 1. Normalise with a **robust** size factor. Total-count normalisation breaks
+#'    exactly when the biology is interesting.
+#' 2. You cannot estimate a per-gene variance at $n=6$. Shrink towards a trend.
+#' 3. Check that the test is calibrated before trusting the FDR; prefer the
+#'    LRT to Wald at small $n$.
+#' 4. Independent filtering raises power for free; filtering on anything
+#'    correlated with the test statistic destroys FDR control.
+#' 5. Set-level tests must account for inter-gene correlation.
+#' 6. **Permute the labels and re-run** - within the right strata.
+#'
+#' **Next:** `E3_prediction_audit.R`

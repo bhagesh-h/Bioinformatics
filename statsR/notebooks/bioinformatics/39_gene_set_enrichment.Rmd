@@ -1,0 +1,530 @@
+---
+title: "Applied 39 - Gene set enrichment done honestly"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topic 29, equations (29.1)-(29.5)
+
+## The question
+
+A differential expression list is 400 genes long. Which **pathways** are
+involved? Almost every trap in this module comes from one fact: **genes in a
+pathway are correlated**, and the standard tests assume they are not.
+
+```{r setup, message = FALSE}
+MODULE_NAME <- "39_gene_set_enrichment"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## 1. Over-representation analysis, eq. (29.1)
+
+ORA asks: is the overlap between my DE list and a pathway bigger than chance?
+Under the null the overlap is **hypergeometric** - sampling `n` genes without
+replacement from `N`, of which `K` are in the set:
+
+$$P(X = k) = \frac{\binom{K}{k}\binom{N-K}{n-k}}{\binom{N}{n}} \tag{29.1}$$
+
+```{r ora}
+header("1. ORA and the hypergeometric null (29.1)")
+N <- 20000; K <- 200; n <- 400; k <- 20
+## phyper(k-1, ..., lower.tail = FALSE) = P(X >= k). Using P(X > k) is an
+## off-by-one that silently makes every p-value too small.
+p_over <- phyper(k - 1, K, N - K, n, lower.tail = FALSE)
+cat(sprintf("  N = %d genes tested, K = %d in the pathway\n", N, K))
+cat(sprintf("  n = %d DE genes, k = %d of them in the pathway\n", n, k))
+cat(sprintf("  expected overlap under the null = n*K/N = %.1f\n", n*K/N))
+cat(sprintf("  fold enrichment = %.2f\n", k/(n*K/N)))
+cat(sprintf("  P(X >= %d) = %.3e   (one-sided hypergeometric, eq. 29.1)\n", k, p_over))
+cat(sprintf("  Fisher exact 2x2 agrees: p = %.3e\n",
+            fisher.test(matrix(c(k, n-k, K-k, N-K-n+k), 2), alternative = "greater")$p.value))
+cat("\n  The BACKGROUND (N) is the most abused choice in all of ORA.\n")
+for (Nb in c(20000, 12000, 6000)) {
+  pb <- phyper(k - 1, K, Nb - K, n, lower.tail = FALSE)
+  cat(sprintf("    background = %5d genes -> p = %.2e, fold = %.2f\n",
+              Nb, pb, k/(n*K/Nb)))
+}
+cat("  Same data, three different answers. The background must be the genes\n")
+cat("  that COULD have been detected - genes that passed your expression\n")
+cat("  filter - not all of Ensembl. Using the whole genome as background\n")
+cat("  manufactures enrichment for anything expressed in your tissue.\n")
+```
+
+## 2. ORA throws away the ranking
+
+```{r ora-threshold}
+header("2. ORA depends on a threshold you chose arbitrarily")
+set.seed(3901)
+G <- 5000
+truth <- rep(0, G); pathway <- 1:100
+## A coordinated but MODEST shift across a whole pathway - the biologically
+## realistic case, and the one ORA is worst at.
+truth[pathway] <- 0.45
+stat <- rnorm(G, truth)
+pv <- 2*pnorm(-abs(stat))
+cat(sprintf("  Pathway of %d genes, each shifted by %.2f SD (a coordinated,\n",
+            length(pathway), 0.45))
+cat("  modest effect). Vary ONLY the DE-list cutoff:\n\n")
+cat(sprintf("  %-14s%10s%10s%14s\n", "p cutoff", "DE genes", "overlap", "ORA p"))
+for (cut in c(0.001, 0.01, 0.05, 0.1, 0.2)) {
+  de <- which(pv < cut); ov <- length(intersect(de, pathway))
+  pp <- phyper(ov - 1, length(pathway), G - length(pathway), length(de),
+               lower.tail = FALSE)
+  cat(sprintf("  %-14s%10d%10d%14.2e\n", sprintf("p < %g", cut), length(de), ov, pp))
+}
+cat("\n  The conclusion swings by orders of magnitude on a cutoff nobody can\n")
+cat("  justify, because ORA sees only in/out and discards the ranking. A\n")
+cat("  gene at p = 0.051 carries almost the same evidence as one at 0.049.\n")
+```
+
+## 3. GSEA: use the whole ranked list, eq. (29.4)
+
+Walk down the ranked list, adding when a gene is in the set and subtracting
+when it is not. The enrichment score is the maximum deviation from zero:
+
+$$ES = \max_{i}\left|\sum_{j \le i} w_j\right| \tag{29.4}$$
+
+```{r gsea}
+header("3. GSEA running enrichment score (29.4)")
+running_es <- function(stat, in_set, p = 1) {
+  o <- order(stat, decreasing = TRUE)
+  s <- stat[o]; m <- in_set[o]
+  ## Hits are weighted by |stat|^p (p = 1 is the GSEA default); misses are
+  ## weighted uniformly so that the walk returns to zero at the end.
+  w <- abs(s)^p
+  hit <- ifelse(m, w/sum(w[m]), 0)
+  miss <- ifelse(m, 0, 1/sum(!m))
+  cumsum(hit - miss)
+}
+in_set <- seq_len(G) %in% pathway
+res <- running_es(stat, in_set)
+es <- res[which.max(abs(res))]
+cat(sprintf("  observed ES = %+.4f (at rank %d of %d)\n",
+            es, which.max(abs(res)), G))
+## Permuting GENE LABELS keeps the ranked statistics fixed and reshuffles set
+## membership. It is a COMPETITIVE null: 'is this set more extreme than a
+## random set of the same size?'
+set.seed(3902)
+NPERM <- 2000
+null_es <- replicate(NPERM, {
+  r <- running_es(stat, sample(in_set))
+  r[which.max(abs(r))]
+})
+p_gsea <- (1 + sum(abs(null_es) >= abs(es)))/(NPERM + 1)
+nes <- es/mean(abs(null_es[sign(null_es) == sign(es)]))
+cat(sprintf("  gene-label permutation null: mean %+.4f, SD %.4f\n",
+            mean(null_es), sd(null_es)))
+cat(sprintf("  NES = %+.3f, permutation p = %.2e   (%d permutations)\n",
+            nes, p_gsea, NPERM))
+cat(sprintf("  ORA at p < 0.05 for comparison: p = %.2e\n",
+            {de <- which(pv < 0.05)
+             phyper(length(intersect(de, pathway)) - 1, length(pathway),
+                    G - length(pathway), length(de), lower.tail = FALSE)}))
+cat("\n  GSEA uses every gene's rank and needs no cutoff. At the conventional\n")
+cat("  p < 0.05 cutoff ORA misses this pathway completely (p = 0.38); at\n")
+cat("  p < 0.01 it scrapes in at 0.045. Its verdict is decided by the cutoff,\n")
+cat("  GSEA's is not - which is the whole argument for rank-based tests when\n")
+cat("  the effect is coordinated and modest rather than large in a few genes.\n")
+```
+
+## 4. Competitive vs self-contained, and why it matters
+
+* **Self-contained**: 'is ANY gene in this set differentially expressed?'
+  Null = no gene in the set changes. Permutes **sample labels**.
+* **Competitive**: 'is this set MORE differential than genes outside it?'
+  Null = set genes behave like the rest. Permutes **gene labels**.
+
+```{r competitive}
+header("4. Competitive vs self-contained nulls (29.2)-(29.3)")
+## Vectorised Welch t-statistic - used from here on, so the simulations below
+## can afford enough replicates for the rates to be meaningful.
+tstat <- function(mat, g) {
+  a <- mat[, g == 1, drop = FALSE]; b <- mat[, g == 0, drop = FALSE]
+  (rowMeans(a) - rowMeans(b)) /
+    sqrt(apply(a, 1, var)/ncol(a) + apply(b, 1, var)/ncol(b))
+}
+set.seed(3903)
+## A GLOBAL shift: EVERY gene moves a little (e.g. a change in library
+## composition or a global stress response). No set is special.
+R4 <- 200; m4 <- 100; G4 <- 4000
+hit_self <- hit_comp <- hit_ora <- 0
+for (i in 1:R4) {
+  sg <- rnorm(G4, 0.30)                     # every gene shifted, none special
+  ism <- seq_len(G4) %in% 1:m4
+  hit_self <- hit_self + (t.test(sg[ism])$p.value < 0.05)
+  rr <- running_es(sg, ism); ee <- rr[which.max(abs(rr))]
+  nl <- replicate(100, {q <- running_es(sg, sample(ism)); q[which.max(abs(q))]})
+  hit_comp <- hit_comp + ((1 + sum(abs(nl) >= abs(ee)))/101 < 0.05)
+  dd <- which(2*pnorm(-abs(sg)) < 0.05)
+  hit_ora <- hit_ora + (phyper(length(intersect(dd, which(ism))) - 1, m4,
+                               G4 - m4, max(length(dd), 1),
+                               lower.tail = FALSE) < 0.05)
+}
+cat(sprintf("  %d datasets in which EVERY gene is shifted by 0.30 SD.\n", R4))
+cat("  The set is in no way special, so a COMPETITIVE test should fire 5% of\n")
+cat("  the time and a SELF-CONTAINED test should fire almost always.\n\n")
+cat(sprintf("  %-46s%14s\n", "test", "fires"))
+cat(sprintf("  %-46s%13.0f%%   <- as designed\n", "self-contained (set mean vs 0)",
+            100*hit_self/R4))
+cat(sprintf("  %-46s%13.0f%%\n", "competitive GSEA (gene permutation)", 100*hit_comp/R4))
+cat(sprintf("  %-46s%13.0f%%\n", "competitive ORA (hypergeometric)", 100*hit_ora/R4))
+cat("\n  The self-contained test is RIGHT by its own definition - genes in the\n")
+cat("  set really did change - but it answers a question you did not ask. On\n")
+cat("  a global shift it declares essentially EVERY pathway significant, which\n")
+cat("  is useless for interpretation. Competitive tests correctly report that\n")
+cat("  nothing is special about this set. Know which one your tool runs:\n")
+cat("  limma's `roast` is self-contained, `camera` is competitive, `fgsea` is\n")
+cat("  competitive, and classic GSEA with sample permutation is self-contained.\n")
+```
+
+## 5. Inter-gene correlation, eq. (29.5) - the big one
+
+Gene-label permutation assumes genes are **exchangeable and independent**.
+They are not: pathway genes are co-regulated. The variance of the set's mean
+statistic is inflated by exactly the design effect from Topic 1:
+
+$$\mathrm{VIF} = 1 + (m-1)\bar\rho \tag{29.5}$$
+
+```{r correlation}
+header("5. Inter-gene correlation inflates everything (29.5)")
+set.seed(3904)
+simulate_correlated <- function(G = 2000, m = 100, rho = 0.10, n = 20) {
+  ## Genes in the set share a latent factor -> exchangeable correlation rho.
+  z <- matrix(rnorm(G*n), G)
+  lat <- rnorm(n)
+  z[1:m, ] <- sqrt(rho)*matrix(rep(lat, each = m), m) + sqrt(1-rho)*z[1:m, ]
+  ## NO differential expression at all: both groups have the same distribution.
+  z
+}
+R5 <- 200; grp5 <- rep(0:1, each = 10)
+cat(sprintf("  %d null datasets per row; Monte Carlo SE on a 5%% rate is ~%.1f%%\n",
+            R5, 100*sqrt(0.05*0.95/R5)))
+cat(sprintf("  %-8s%12s%14s%18s%12s\n", "rho", "VIF (29.5)", "GSEA p<.05",
+            "self-cont. p<.05", "ORA p<.05"))
+for (rho in c(0.0, 0.02, 0.05, 0.10)) {
+  hg <- hs <- ho <- 0
+  for (i in 1:R5) {
+    z <- simulate_correlated(rho = rho)
+    s <- tstat(z, grp5); iset <- seq_len(nrow(z)) %in% 1:100
+    r <- running_es(s, iset); e <- r[which.max(abs(r))]
+    nl <- replicate(100, {q <- running_es(s, sample(iset)); q[which.max(abs(q))]})
+    hg <- hg + ((1 + sum(abs(nl) >= abs(e)))/101 < 0.05)
+    hs <- hs + (t.test(s[iset])$p.value < 0.05)
+    de <- which(2*pt(-abs(s), 18) < 0.05)
+    ho <- ho + (phyper(length(intersect(de, which(iset))) - 1, 100, nrow(z) - 100,
+                       max(length(de), 1), lower.tail = FALSE) < 0.05)
+  }
+  cat(sprintf("  %-8.2f%12.1f%13.0f%%%17.0f%%%11.0f%%\n", rho, 1 + 99*rho,
+              100*hg/R5, 100*hs/R5, 100*ho/R5))
+}
+cat("\n  There is NO differential expression anywhere in these simulations, so\n")
+cat("  every column should read 5%. The rho = 0 row confirms the tests are\n")
+cat("  calibrated when genes really are independent. A correlation of just\n")
+cat("  rho = 0.05 - far below what real pathways show - already wrecks the\n")
+cat("  false positive rate, because VIF = 1 + (m-1)*rho grows with SET SIZE.\n")
+cat("  This is the design effect of eq. (1.8) under another name.\n")
+cat("\n  Note ORA stays roughly calibrated here: thresholding at p < 0.05\n")
+cat("  discards most of the shared latent signal, so ORA is less sensitive to\n")
+cat("  correlation than the rank-based tests - one of its very few advantages.\n")
+cat("\n  The fix is a test that estimates rho-bar and divides by sqrt(VIF) -\n")
+cat("  that is precisely what limma's `camera` does - or a null that permutes\n")
+cat("  SAMPLES, which preserves the correlation structure between genes.\n")
+```
+
+## 6. Sample permutation preserves gene-gene correlation
+
+```{r sample-perm}
+header("6. Sample permutation: the null that respects correlation")
+set.seed(3905)
+G2 <- 2000; m <- 100; n <- 24; rho <- 0.10
+z <- matrix(rnorm(G2*n), G2)
+lat <- rnorm(n)
+z[1:m, ] <- sqrt(rho)*matrix(rep(lat, each = m), m) + sqrt(1-rho)*z[1:m, ]
+grp <- rep(0:1, each = n/2)
+s_obs <- tstat(z, grp); iset <- seq_len(G2) %in% 1:m
+## Two statistics, two nulls each.
+##   gene permutation  - reshuffles SET MEMBERSHIP, keeping the statistics fixed.
+##                       Destroys the correlation among set genes.
+##   sample permutation- reshuffles GROUP LABELS and recomputes the statistics.
+##                       Genes keep their correlations, so the null is correct.
+mean_gene <- replicate(1000, mean(s_obs[sample(iset)]))
+mean_samp <- replicate(1000, {sp <- tstat(z, sample(grp)); mean(sp[iset])})
+es_of <- function(s, i) {r <- running_es(s, i); r[which.max(abs(r))]}
+es_gene <- replicate(500, es_of(s_obs, sample(iset)))
+es_samp <- replicate(500, {sp <- tstat(z, sample(grp)); es_of(sp, iset)})
+m_obs <- mean(s_obs[iset]); e_obs <- es_of(s_obs, iset)
+cat(sprintf("  one null dataset: %d genes, set of %d, rho = %.2f, n = %d\n",
+            G2, m, rho, n))
+cat(sprintf("  VIF = 1 + (m-1)*rho = %.1f, so the correct null SD for the set\n",
+            1 + (m-1)*rho))
+cat(sprintf("  MEAN statistic is sqrt(VIF) = %.2f times the independence null.\n\n",
+            sqrt(1 + (m-1)*rho)))
+cat(sprintf("  %-22s%12s%10s%12s\n", "statistic", "null", "SD", "p-value"))
+cat(sprintf("  %-22s%12s%10.4f%12.3f\n", "set mean t", "gene perm", sd(mean_gene),
+            (1 + sum(abs(mean_gene) >= abs(m_obs)))/1001))
+cat(sprintf("  %-22s%12s%10.4f%12.3f\n", "set mean t", "sample perm", sd(mean_samp),
+            (1 + sum(abs(mean_samp) >= abs(m_obs)))/1001))
+cat(sprintf("  %-22s%12s%10.4f%12.3f\n", "GSEA ES", "gene perm", sd(es_gene),
+            (1 + sum(abs(es_gene) >= abs(e_obs)))/501))
+cat(sprintf("  %-22s%12s%10.4f%12.3f\n", "GSEA ES", "sample perm", sd(es_samp),
+            (1 + sum(abs(es_samp) >= abs(e_obs)))/501))
+cat(sprintf("\n  set mean t : observed SD ratio %.2f  vs sqrt(VIF) = %.2f  <- matches\n",
+            sd(mean_samp)/sd(mean_gene), sqrt(1 + (m-1)*rho)))
+cat(sprintf("  GSEA ES    : observed SD ratio %.2f\n", sd(es_samp)/sd(es_gene)))
+cat("\n  For the set MEAN the theory is exact: the correlation-respecting null\n")
+cat("  is wider by almost exactly sqrt(VIF), which is the whole content of\n")
+cat("  eq. (29.5). The ES is a maximum of a bounded random walk rather than a\n")
+cat("  mean, so its null widens too but by a smaller, non-analytic factor -\n")
+cat("  a useful reminder that VIF quantifies the variance of an AVERAGE, and\n")
+cat("  does not transfer unchanged to every other statistic.\n")
+cat("\n  Sample permutation needs enough samples to permute: with n per group\n")
+cat("  below ~7 there are too few distinct label assignments for a two-sided\n")
+cat("  p to even reach 0.05, which is why small studies are pushed towards\n")
+cat("  `camera`-style analytic corrections instead.\n")
+```
+
+## 7. Selection bias: length, expression and set size
+
+```{r bias}
+header("7. Detection bias: long, highly expressed genes win by default")
+set.seed(3906)
+G3 <- 6000
+len <- exp(rnorm(G3, log(2000), 0.6))          # gene length, bp
+expr <- exp(rnorm(G3, log(200), 1.1))          # mean count per sample
+## EVERY gene has exactly the same true log2 fold change. The only thing that
+## differs is PRECISION: counts scale with length x expression, and a Poisson
+## count of size mu has relative SE 1/sqrt(mu). So the standard error of the
+## log fold change shrinks for long, highly expressed genes.
+LFC_TRUE <- 0.35
+counts <- expr*(len/2000)
+se_lfc <- sqrt(2/counts) + 0.05                # +0.05: irreducible biological CV
+lfc_hat <- rnorm(G3, LFC_TRUE, se_lfc)
+p3 <- 2*pnorm(-abs(lfc_hat/se_lfc))
+de3 <- p3 < 0.05
+cat(sprintf("  %d genes, ALL with the same true log2 FC of %.2f.\n", G3, LFC_TRUE))
+cat(sprintf("  %d (%.0f%%) reach p < 0.05.\n\n", sum(de3), 100*mean(de3)))
+cat(sprintf("  %-26s%12s%12s\n", "", "DE genes", "non-DE"))
+cat(sprintf("  %-26s%12.0f%12.0f\n", "median length (bp)",
+            median(len[de3]), median(len[!de3])))
+cat(sprintf("  %-26s%12.0f%12.0f\n", "median expression",
+            median(expr[de3]), median(expr[!de3])))
+cat(sprintf("  %-26s%12.3f%12.3f\n", "median SE of logFC",
+            median(se_lfc[de3]), median(se_lfc[!de3])))
+cat("\n  No gene is more differential than any other, yet the DE list is\n")
+cat("  systematically enriched for long, highly expressed genes - purely\n")
+cat("  because they are measured more precisely. A pathway made of such genes\n")
+cat("  (ribosome, spliceosome, oxidative phosphorylation) will look enriched\n")
+cat("  for reasons that have nothing to do with biology.\n")
+cat("\n  `goseq` fixes this by fitting a spline for P(DE | length) and using a\n")
+cat("  length-weighted null instead of the plain hypergeometric. GSEA on a\n")
+cat("  ranked list is less affected but not immune, since power still shapes\n")
+cat("  the ranking that GSEA walks down.\n")
+cat("\n  Set SIZE is the other systematic bias:\n")
+cat(sprintf("  %-14s%16s%18s\n", "set size m", "VIF at rho=0.05", "independent genes"))
+for (mm in c(10, 50, 200, 1000))
+  cat(sprintf("  %-14d%16.1f%18.1f\n", mm, 1 + (mm-1)*0.05, mm/(1 + (mm-1)*0.05)))
+cat("  A 1000-gene GO term carries only ~20 genes' worth of INDEPENDENT\n")
+cat("  information. Restrict to sets of ~15-500 genes: smaller sets are\n")
+cat("  unstable, larger ones are both correlation-inflated and too vague to\n")
+cat("  interpret even when real.\n")
+```
+
+## 8. Multiple testing across overlapping sets
+
+```{r multiple}
+header("8. Thousands of OVERLAPPING sets")
+set.seed(3907)
+## Build a GO-like hierarchy: one broad parent term, split into children, split
+## again into grandchildren. A parent contains every gene of its descendants,
+## so these tests are not remotely independent.
+G8 <- 5000
+parent <- 1:600
+children <- split(parent, rep(1:6, each = 100))
+grandkids <- unlist(lapply(children, function(ch) split(ch, rep(1:4, each = 25))),
+                    recursive = FALSE)
+## Plus 1000 unrelated background terms, as a real MSigDB run would have.
+others <- lapply(1:1000, function(i) sample(601:G8, sample(20:200, 1)))
+sets <- c(list(parent = parent), children, grandkids, others)
+names(sets) <- c("parent", paste0("child", 1:6),
+                 paste0("grand", 1:24), paste0("bg", 1:1000))
+## ONE biological truth: a single child term (100 genes) is really affected.
+## Its 4 grandchildren are subsets of it, and `parent` contains it - so those
+## 5 other terms are enriched purely by inclusion, not by separate biology.
+truth8 <- rep(0, G8); truth8[children[[1]]] <- 2.0
+s8 <- rnorm(G8, truth8)
+p8 <- sapply(sets, function(g) {
+  ov <- intersect(which(2*pnorm(-abs(s8)) < 0.05), g)
+  de <- which(2*pnorm(-abs(s8)) < 0.05)
+  phyper(length(ov) - 1, length(g), G8 - length(g), length(de), lower.tail = FALSE)
+})
+padj8 <- p.adjust(p8, "BH")
+sig <- names(padj8)[padj8 < 0.05]
+cat(sprintf("  %d sets tested. TRUTH: exactly ONE 100-gene term (child1) is\n",
+            length(sets)))
+cat("  affected. Every other term is either disjoint from it or related to it\n")
+cat("  only by containment.\n")
+cat(sprintf("  %-40s%14s\n", "", "discoveries"))
+cat(sprintf("  %-40s%14d\n", "raw p < 0.05", sum(p8 < 0.05)))
+cat(sprintf("  %-40s%14d\n", "BH q < 0.05", sum(padj8 < 0.05)))
+cat(sprintf("  %-40s%14d\n", "BY q < 0.05", sum(p.adjust(p8, "BY") < 0.05)))
+cat(sprintf("  %-40s%14d\n", "Bonferroni", sum(p.adjust(p8, "bonferroni") < 0.05)))
+lineage <- c("parent", "child1", paste0("grand", 1:4))
+cat(sprintf("\n  BH-significant terms (%d): %s\n", length(sig),
+            paste(sig, collapse = ", ")))
+cat(sprintf("  in the child1 lineage : %d\n", sum(sig %in% lineage)))
+cat(sprintf("  outside it (genuine false positives): %d\n", sum(!sig %in% lineage)))
+cat("\n  Almost every discovery is the true term, one of its ANCESTORS, or one\n")
+cat("  of its CHILDREN - all significant only because they share genes with\n")
+cat("  child1. The FDR control is not wrong: these sets really are enriched.\n")
+cat("  But reporting them as separate discoveries multiplies ONE biological\n")
+cat("  finding into several, which is how enrichment tables end up with 40\n")
+cat("  rows that all say 'immune response'.\n")
+cat("\n  Two separate issues, often confused:\n")
+cat("    VALIDITY - BH assumes positive regression dependence (Topic 6). GO's\n")
+cat("      nesting induces exactly that, so BH is fine. BY is valid under any\n")
+cat("      dependence but is far too conservative to be worth it here.\n")
+cat("    INTERPRETATION - the discoveries are REDUNDANT. Collapse them before\n")
+cat("      counting: topGO's `elim`/`weight` algorithms test a term\n")
+cat("      conditional on its children, and REVIGO-style semantic clustering\n")
+cat("      groups terms after the fact. Report the most specific significant\n")
+cat("      term in each lineage, not the whole lineage.\n")
+```
+
+## 9. Figure
+
+```{r figure}
+png(file.path(OUT, "gene_set_enrichment.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+plot(res, type = "l", col = "steelblue", lwd = 2, xlab = "rank in ordered list",
+     ylab = "running ES", main = sprintf("GSEA walk (ES = %+.3f)", es))
+abline(h = 0, lty = 3)
+rug(which(in_set[order(stat, decreasing = TRUE)]), col = "firebrick", lwd = 0.5)
+hist(null_es, breaks = 40, col = adjustcolor("grey60", 0.7), border = "white",
+     main = "Gene-permutation null", xlab = "ES")
+abline(v = es, col = "firebrick", lwd = 2)
+plot(density(mean_samp), col = "firebrick", lwd = 2, xlab = "set mean t",
+     main = "Correlation widens the null", ylim = c(0, max(density(mean_gene)$y)))
+lines(density(mean_gene), col = "steelblue", lwd = 2)
+legend("topright", c("sample perm.","gene perm."), col = c("firebrick","steelblue"),
+       lwd = 2, bty = "n", cex = 0.7)
+curve(1 + (x - 1)*0.05, 1, 500, col = "firebrick", lwd = 2, log = "x",
+      xlab = "set size m", ylab = "VIF", main = "Eq. (29.5): VIF = 1+(m-1)rho")
+curve(1 + (x - 1)*0.02, 1, 500, col = "steelblue", lwd = 2, add = TRUE)
+legend("topleft", c("rho = 0.05","rho = 0.02"), col = c("firebrick","steelblue"),
+       lwd = 2, bty = "n", cex = 0.7)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "gene_set_enrichment.png"), "\n")
+```
+
+# PROBLEMS
+
+### Problem 1: The background set
+
+You profile brain tissue; 12,000 of 20,000 genes are expressed. A neuronal
+pathway (200 genes, 190 expressed in brain) overlaps your 400-gene DE list
+in 20 genes. Compute ORA with the whole genome vs the expressed genes.
+
+```{r problem1}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# k <- 20; n <- 400
+# cat(sprintf("  %-34s%8s%8s%12s%10s\n","background","N","K","expected","p"))
+# for (bg in list(c("whole genome", 20000, 200), c("expressed in brain", 12000, 190))) {
+#   Nb <- as.numeric(bg[2]); Kb <- as.numeric(bg[3])
+#   cat(sprintf("  %-34s%8.0f%8.0f%12.2f%10.2e\n", bg[1], Nb, Kb, n*Kb/Nb,
+#               phyper(k - 1, Kb, Nb - Kb, n, lower.tail = FALSE)))
+# }
+#
+# ## The genome background asks 'are these genes over-represented relative to
+# ## ALL human genes?' - and neuronal genes are, in brain, trivially. The
+# ## correct background is the set of genes that could have entered the DE list
+# ## at all: those that passed your expression filter and were actually tested.
+# ## The genome background is the commonest reason a pathway analysis
+# ## returns 'neuron differentiation' from a brain experiment.
+```
+
+### Problem 2: Set size and the VIF
+
+Measure the false positive rate of a competitive test under a global null
+with rho = 0.05, for set sizes 20, 100 and 400. Compare to eq. (29.5).
+
+```{r problem2}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# set.seed(77)
+# cat(sprintf("  %-12s%12s%16s\n", "set size m", "VIF (29.5)", "self-cont. FPR"))
+# for (m_ in c(20, 100, 400)) {
+#   hits <- 0; R <- 120
+#   for (i in 1:R) {
+#     nn <- 20; Gg <- 2000
+#     zz <- matrix(rnorm(Gg*nn), Gg); la <- rnorm(nn)
+#     zz[1:m_, ] <- sqrt(0.05)*matrix(rep(la, each = m_), m_) + sqrt(0.95)*zz[1:m_, ]
+#     gg <- rep(0:1, each = nn/2)
+#     ss <- tstat(zz, gg)
+#     hits <- hits + (t.test(ss[1:m_])$p.value < 0.05)
+#   }
+#   cat(sprintf("  %-12d%12.1f%15.0f%%\n", m_, 1 + (m_-1)*0.05, 100*hits/R))
+# }
+#
+# ## The FPR climbs with set size exactly as VIF = 1 + (m-1)*rho predicts,
+# ## because the effective number of independent genes is m/VIF, not m. A
+# ## 400-gene set at rho = 0.05 carries only ~20 genes' worth of independent
+# ## information. This is why big, vague GO terms dominate enrichment results.
+```
+
+### Problem 3: Leading edge, and what it is not
+
+Extract the leading-edge genes (those before the ES peak) from section 3.
+What fraction of the true pathway do they recover, and how stable are they?
+
+```{r problem3}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# o <- order(stat, decreasing = TRUE)
+# peak <- which.max(abs(res))
+# lead <- o[1:peak][in_set[o[1:peak]]]
+# cat(sprintf("  ES peak at rank %d; leading edge = %d genes\n", peak, length(lead)))
+# cat(sprintf("  recovers %.0f%% of the %d true pathway genes\n",
+#             100*length(lead)/length(pathway), length(pathway)))
+# set.seed(5)
+# jac <- replicate(30, {
+#   s2 <- rnorm(G, truth)                     # a replicate experiment
+#   r2 <- running_es(s2, in_set); o2 <- order(s2, decreasing = TRUE)
+#   l2 <- o2[1:which.max(abs(r2))][in_set[o2[1:which.max(abs(r2))]]]
+#   length(intersect(lead, l2))/length(union(lead, l2))
+# })
+# cat(sprintf("  Jaccard overlap with 30 replicate experiments: %.2f (SD %.2f)\n",
+#             mean(jac), sd(jac)))
+#
+# ## The leading edge is UNSTABLE: repeat the experiment and you get a
+# ## substantially different gene list, because which genes fall before the peak
+# ## depends on noise in the ranking. Treat it as a hypothesis-generating
+# ## summary of WHY a set scored, never as 'the genes driving the pathway'.
+```
+
+## What to take away
+
+1. The **background** is the genes you could have detected. Nothing else.
+2. ORA discards the ranking and hinges on an arbitrary cutoff; prefer a
+   rank-based test when effects are coordinated and modest.
+3. Know whether your test is **competitive** or **self-contained** - they
+   answer different questions and disagree on a global shift.
+4. Inter-gene correlation inflates competitive tests by
+   $\mathrm{VIF} = 1+(m-1)\bar\rho$ - the design effect again. Use `camera`
+   or permute **samples**, not genes.
+5. Length and expression bias the DE list; `goseq` reweights for it.
+6. BH across overlapping GO terms is valid but the terms are redundant -
+   collapse before counting.
+
+**Next:** `40_networks_and_multiomics.R`

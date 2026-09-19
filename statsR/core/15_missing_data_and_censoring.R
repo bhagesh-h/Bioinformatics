@@ -1,0 +1,262 @@
+#' ---
+#' title: "Module 15 - Missing data, censoring, and measurement limits"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 15, equations (15.1)-(15.9)
+#'
+#' ## What you will learn
+#'
+#' 1. MCAR / MAR / MNAR (15.1)-(15.3) simulated side by side.
+#' 2. Multiple imputation and **Rubin's rules (15.4)-(15.7)** from scratch.
+#' 3. Left-censoring as a **Tobit likelihood (15.8)**, not as missingness.
+#' 4. The one diagnostic plot every proteomics report needs.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "15_missing_data_and_censoring"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. The three mechanisms, eq. (15.1)-(15.3)
+#'
+#' Critically, **MAR and MNAR cannot be distinguished from the observed data.**
+
+#+ mechanisms
+header("1. Simulating MCAR, MAR and MNAR (15.1)-(15.3)")
+make_data <- function(n = 600) {
+  x <- rnorm(n); data.frame(x = x, y = 2 + 1.5*x + rnorm(n))
+}
+impose_missing <- function(df, mechanism, rate = 0.4) {
+  n <- nrow(df)
+  p <- switch(mechanism,
+    MCAR = rep(rate, n),                                      # eq. (15.1)
+    MAR  = plogis(2.2*df$x - log((1-rate)/rate)),             # eq. (15.2): on x
+    MNAR = plogis(2.2*scale(df$y)[, 1] - log((1-rate)/rate))) # eq. (15.3): on y
+  miss <- runif(n) < p
+  df$missing <- miss; df$y[miss] <- NA
+  df
+}
+TRUE_BETA <- 1.5
+set.seed(1501)
+cat(sprintf("  target estimand: beta_x = %.1f\n\n", TRUE_BETA))
+cat(sprintf("  %-12s%11s%21s%9s\n", "mechanism", "% missing",
+            "complete-case beta", "bias"))
+for (mech in c("MCAR", "MAR", "MNAR")) {
+  b <- replicate(200, {
+    obs <- impose_missing(make_data(), mech)
+    coef(lm(y ~ x, data = obs[!is.na(obs$y), ]))["x"]
+  })
+  obs1 <- impose_missing(make_data(), mech)
+  cat(sprintf("  %-12s%10.1f%%%21.4f%9.4f\n", mech, 100*mean(obs1$missing),
+              mean(b), mean(b) - TRUE_BETA))
+}
+cat("\n  MCAR: complete-case is unbiased (just wasteful).\n")
+cat("  MAR : unbiased HERE because missingness depends only on x, which is IN\n")
+cat("        the model. Not general - depend on an omitted covariate and it\n")
+cat("        would be biased.\n")
+cat("  MNAR: biased, and no imputation fixes it without an untestable\n")
+cat("        assumption.\n")
+
+#+ mar-covariate
+cat("\n--- MAR in a COVARIATE, depending on the outcome ---\n")
+set.seed(1502)
+bias_cc <- replicate(150, {
+  n <- 500
+  x <- rnorm(n); zz <- 0.8*x + rnorm(n)
+  y <- 2 + 1.5*x + 0.7*zz + rnorm(n)
+  x[runif(n) < plogis(1.5*scale(y)[, 1] - 0.4)] <- NA     # MAR: depends on y
+  d <- data.frame(x = x, z = zz, y = y)
+  cc <- d[complete.cases(d), ]
+  if (nrow(cc) > 30) coef(lm(y ~ x + z, data = cc))["x"] - 1.5 else NA
+})
+cat(sprintf("  complete-case bias in beta_x: %+.4f\n", mean(bias_cc, na.rm = TRUE)))
+cat("  Under MAR the fix is a method that CONDITIONS on the observed data\n")
+cat("  driving missingness - multiple imputation INCLUDING y.\n")
+
+#' ## 2. Multiple imputation and Rubin's rules, eq. (15.4)-(15.7)
+#'
+#' $$\bar Q=\frac1M\sum\hat Q_m,\qquad T=\bar U+\Big(1+\frac1M\Big)B$$
+#'
+#' The `(1+1/M)B` term is exactly what single imputation omits.
+
+#+ rubin
+header("2. Rubin's rules from scratch (15.4)-(15.7)")
+impute_once <- function(df, target, predictors) {
+  ## Stochastic regression imputation (the core step of MICE). Adding residual
+  ## noise AND drawing beta from its sampling distribution is what makes it
+  ## 'proper'; predicting the conditional mean alone shrinks variability.
+  cc <- df[complete.cases(df[, c(target, predictors), drop = FALSE]), ]
+  f <- lm(reformulate(predictors, target), data = cc)
+  miss <- is.na(df[[target]])
+  if (!any(miss)) return(df[[target]])
+  beta_draw <- MASS::mvrnorm(1, coef(f), vcov(f))
+  Xm <- model.matrix(reformulate(predictors), data = df[miss,, drop = FALSE])
+  out <- df[[target]]
+  out[miss] <- as.vector(Xm %*% beta_draw) + rnorm(sum(miss), 0, sigma(f))
+  out
+}
+rubin_pool <- function(est, vars, M) {
+  Q <- mean(est); U <- mean(vars)                      # eq. (15.4)-(15.5)
+  B <- if (M > 1) var(est) else 0
+  Tt <- U + (1 + 1/M) * B                              # eq. (15.6)
+  gamma <- if (Tt > 0) (1 + 1/M) * B / Tt else 0
+  nu <- if (B > 0) (M - 1) * (1 + U / ((1 + 1/M) * B))^2 else Inf   # eq. (15.7)
+  list(estimate = Q, se = sqrt(Tt), df = nu, fmi = gamma)
+}
+run_mi <- function(df, M) {
+  est <- numeric(M); vars <- numeric(M)
+  for (m in seq_len(M)) {
+    d <- df; d$y <- impute_once(d, "y", "x")
+    f <- lm(y ~ x, data = d)
+    est[m] <- coef(f)["x"]; vars[m] <- coef(summary(f))["x", "Std. Error"]^2
+  }
+  rubin_pool(est, vars, M)
+}
+set.seed(1503)
+cat("  Coverage of a nominal 95% CI for beta_x, MCAR with 40% of y missing:\n")
+cover <- c(`complete case` = 0, `single imputation` = 0, `MI (M=20)` = 0)
+width <- list(a = c(), b = c(), c = c())
+N_REP <- 200
+for (rep in seq_len(N_REP)) {
+  obs <- impose_missing(make_data(n = 300), "MCAR")
+  f_cc <- lm(y ~ x, data = obs[!is.na(obs$y), ])
+  ci <- confint(f_cc)["x", ]
+  cover[1] <- cover[1] + (ci[1] <= TRUE_BETA && TRUE_BETA <= ci[2])
+  width$a <- c(width$a, diff(ci))
+  r1 <- run_mi(obs, 1)
+  ci1 <- r1$estimate + c(-1, 1) * 1.96 * r1$se
+  cover[2] <- cover[2] + (ci1[1] <= TRUE_BETA && TRUE_BETA <= ci1[2])
+  width$b <- c(width$b, diff(ci1))
+  r20 <- run_mi(obs, 20)
+  ci20 <- r20$estimate + c(-1, 1) * qt(0.975, min(r20$df, 1e6)) * r20$se
+  cover[3] <- cover[3] + (ci20[1] <= TRUE_BETA && TRUE_BETA <= ci20[2])
+  width$c <- c(width$c, diff(ci20))
+}
+cat(sprintf("  %-22s%11s%16s\n", "method", "coverage", "mean CI width"))
+for (i in 1:3)
+  cat(sprintf("  %-22s%10.1f%%%16.4f\n", names(cover)[i], 100*cover[i]/N_REP,
+              mean(width[[i]])))
+cat("\n  Single imputation treats imputed values as OBSERVED, so its CI is too\n")
+cat("  narrow and UNDERCOVERS. Multiple imputation adds (1+1/M)B and recovers\n")
+cat("  nominal coverage.\n")
+set.seed(99)
+r <- run_mi(impose_missing(make_data(n = 300), "MCAR"), 20)
+cat(sprintf("\n  Example pooled result: beta = %.4f, SE = %.4f, df = %.1f\n",
+            r$estimate, r$se, r$df))
+cat(sprintf("  fraction of missing information = %.3f   (eq. 15.7)\n", r$fmi))
+cat("  Use M >= 20 when the FMI is substantial.\n")
+
+#' ## 3. Left-censoring is NOT missingness, eq. (15.8)
+
+#+ tobit
+header("3. Limit of detection: censored likelihood vs substitution (15.8)")
+tobit_mle <- function(y_obs, censored, L) {
+  n_cen <- sum(censored)
+  nll <- function(par) {
+    mu <- par[1]; sigma <- exp(par[2])
+    ll_obs <- sum(dnorm(y_obs[!censored], mu, sigma, log = TRUE))
+    ## Each censored point contributes log Phi((L-mu)/sigma). Multiplying by
+    ## n_cen is essential - the term is identical for every censored point.
+    ll_cen <- n_cen * pnorm((L - mu) / sigma, log.p = TRUE)
+    -(ll_obs + ll_cen)
+  }
+  st <- c(mean(y_obs[!censored]), log(max(sd(y_obs[!censored]), 1e-3)))
+  o <- optim(st, nll, method = "Nelder-Mead",
+             control = list(reltol = 1e-12, maxit = 5000))
+  c(mu = o$par[1], sigma = exp(o$par[2]))
+}
+set.seed(1504)
+TRUE_MU <- 20; TRUE_SD <- 3; L <- 18
+res <- t(replicate(400, {
+  z <- rnorm(120, TRUE_MU, TRUE_SD); cen <- z < L
+  y_half <- ifelse(cen, L/2, z); y_sq2 <- ifelse(cen, L/sqrt(2), z)
+  y_lod <- ifelse(cen, L, z)
+  tob <- tobit_mle(ifelse(cen, L, z), cen, L)
+  c(drop_mu = mean(z[!cen]), drop_sd = sd(z[!cen]),
+    half_mu = mean(y_half), half_sd = sd(y_half),
+    sq2_mu = mean(y_sq2), sq2_sd = sd(y_sq2),
+    lod_mu = mean(y_lod), lod_sd = sd(y_lod),
+    ## unname(): tob carries names, and replicate() would otherwise mangle
+    ## the column labels into "tobit_mu.mu".
+    tobit_mu = unname(tob["mu"]), tobit_sd = unname(tob["sigma"]),
+    pct = mean(cen))
+}))
+cat(sprintf("  truth: mu = %g, sigma = %g, LOD = %g; mean censored %.1f%%\n\n",
+            TRUE_MU, TRUE_SD, L, 100*mean(res[, "pct"])))
+cat(sprintf("  %-28s%13s%9s%16s%9s\n", "strategy", "mean mu_hat", "bias",
+            "mean sigma_hat", "bias"))
+for (row_ in list(c("drop", "drop censored values"), c("half", "substitute L/2"),
+                  c("sq2", "substitute L/sqrt(2)"), c("lod", "substitute L"),
+                  c("tobit", "censored MLE (15.8)"))) {
+  mu_m <- mean(res[, paste0(row_[1], "_mu")]); sd_m <- mean(res[, paste0(row_[1], "_sd")])
+  cat(sprintf("  %-28s%13.4f%9.4f%16.4f%9.4f\n", row_[2], mu_m, mu_m - TRUE_MU,
+              sd_m, sd_m - TRUE_SD))
+}
+cat("\n  Every substitution rule is biased in BOTH the mean and the SD. The\n")
+cat("  censored likelihood recovers both essentially without bias.\n")
+
+#' ## 4. The diagnostic every proteomics report needs
+
+#+ diagnostic
+header("4. Diagnosing the mechanism from missingness vs abundance")
+set.seed(1505)
+G <- 1500; n <- 20
+true_abundance <- rnorm(G, 22, 2.5)
+Y <- matrix(rnorm(G * n, true_abundance, 0.8), nrow = G)
+is_mnar <- runif(G) < 0.7
+p_missing <- ifelse(is_mnar, plogis(-(true_abundance - 20.5) / 0.6), 0.15)
+M <- matrix(runif(G * n), nrow = G) < p_missing
+Yobs <- Y; Yobs[M] <- NA
+miss_rate <- rowMeans(is.na(Yobs))
+mean_obs <- rowMeans(Yobs, na.rm = TRUE)
+ok <- is.finite(mean_obs)
+sp <- cor(mean_obs[ok], miss_rate[ok], method = "spearman")
+cat(sprintf("  Spearman(mean observed abundance, missingness rate) = %+.3f\n", sp))
+cat("  A strong NEGATIVE correlation => abundance-dependent (MNAR) missingness.\n")
+qs <- cut(mean_obs[ok], quantile(mean_obs[ok], 0:5/5), include.lowest = TRUE,
+          labels = paste0("Q", 1:5))
+cat(sprintf("\n  %-26s%18s\n", "mean-abundance quintile", "mean missingness"))
+for (lv in levels(qs))
+  cat(sprintf("  %-26s%18.3f\n", lv, mean(miss_rate[ok][qs == lv])))
+cat("\n  Treat MNAR and MAR features DIFFERENTLY. Applying one imputer to both\n")
+cat("  is the standard mistake (stats.md Topic 25, Module 35).\n")
+
+#' ## 5. Figure
+
+#+ figure
+png(file.path(OUT, "missing_data.png"), width = 1300, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+set.seed(77)
+full <- make_data(n = 800)
+plot(NA, xlim = range(full$x), ylim = range(full$y), xlab = "x",
+     ylab = "y (true value)", main = "Which points go missing")
+cols <- c("steelblue", "darkorange", "firebrick")
+for (i in seq_along(c("MCAR", "MAR", "MNAR"))) {
+  obs <- impose_missing(full, c("MCAR", "MAR", "MNAR")[i])
+  points(full$x[obs$missing], full$y[obs$missing], pch = 16, cex = 0.4,
+         col = adjustcolor(cols[i], 0.5))
+}
+legend("topleft", c("MCAR", "MAR", "MNAR"), col = cols, pch = 16, bty = "n", cex = 0.7)
+zz <- rnorm(3000, TRUE_MU, TRUE_SD)
+hist(zz, breaks = 60, col = adjustcolor("steelblue", 0.5), border = "white",
+     main = "Eq. (15.8): left-censoring", xlab = "value")
+hist(zz[zz >= L], breaks = 60, col = adjustcolor("darkorange", 0.7), border = "white",
+     add = TRUE)
+abline(v = L, col = "red", lwd = 2)
+plot(mean_obs[ok], miss_rate[ok], pch = ".", col = "steelblue",
+     xlab = "mean observed abundance", ylab = "missingness rate",
+     main = sprintf("MNAR signature (Spearman %+.2f)", sp))
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "missing_data.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 15)
+#'
+#' 1. Name the mechanism for each variable; you cannot TEST MAR vs MNAR.
+#' 2. Never impute the outcome to create observations.
+#' 3. Use M >= 20 imputations, and INCLUDE the outcome in the imputation model.
+#' 4. Model detection limits as CENSORING (15.8), not as missingness.
+#' 5. Report a sensitivity analysis over plausible MNAR departures.
+#'
+#' **Next:** `16_matrix_algebra.R`

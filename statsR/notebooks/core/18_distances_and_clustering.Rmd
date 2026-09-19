@@ -1,0 +1,249 @@
+---
+title: "Module 18 - Distances, clustering, and embeddings"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topic 18, equations (18.1)-(18.14)
+
+Clustering always returns clusters. Which would survive a different distance,
+a different seed, or a different half of the data?
+
+## What you will learn
+
+1. The distance zoo (18.1)-(18.5) and the Euclidean/correlation identity (18.6).
+2. The curse of dimensionality (18.7).
+3. Linkage choice (18.8)-(18.9) and k-means (18.10).
+4. Choosing K: silhouette (18.11), gap statistic (18.12), **stability**.
+5. Double dipping: testing the features that defined the clusters.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(cluster))
+MODULE_NAME <- "18_distances_and_clustering"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## 1. The distance zoo, eq. (18.1)-(18.6)
+
+```{r distances}
+header("1. Different distances answer different questions (18.1)-(18.5)")
+profiles <- rbind(geneA = 1:6, geneB = 11:16, geneC = 6:1)
+corr_distance <- function(a, b) 1 - cor(a, b)                   # eq. (18.2)
+cosine_distance <- function(a, b) 1 - sum(a*b)/(sqrt(sum(a^2))*sqrt(sum(b^2)))
+bray_curtis <- function(a, b) sum(abs(a-b)) / sum(a+b)          # eq. (18.4)
+cat(sprintf("  %-14s%11s%13s%9s%13s\n", "pair", "Euclidean", "correlation",
+            "cosine", "Bray-Curtis"))
+for (pr in list(c("geneA","geneB"), c("geneA","geneC"), c("geneB","geneC"))) {
+  a <- profiles[pr[1], ]; b <- profiles[pr[2], ]
+  cat(sprintf("  %-14s%11.3f%13.3f%9.3f%13.3f\n", paste(pr, collapse="-"),
+              sqrt(sum((a-b)^2)), corr_distance(a,b), cosine_distance(a,b),
+              bray_curtis(a,b)))
+}
+cat("\n  A-B: identical SHAPE, different level. Correlation distance says 0;\n")
+cat("  Euclidean says 24.5. Choose the distance from the QUESTION.\n")
+set.seed(1801)
+p <- 50; xv <- rnorm(p); yv <- 0.6*xv + rnorm(p)
+zx <- scale(xv)[, 1]; zy <- scale(yv)[, 1]
+cat(sprintf("\n  Verifying eq. (18.6): d^2(z_x, z_y) = 2(p-1)(1-r)\n"))
+cat(sprintf("    d^2 computed = %.6f\n", sum((zx-zy)^2)))
+cat(sprintf("    2(p-1)(1-r)  = %.6f   <- identical\n", 2*(p-1)*(1-cor(xv,yv))))
+cat("  Clustering z-scored features by Euclidean distance IS clustering by\n")
+cat("  correlation. Knowing this prevents a lot of method-shopping.\n")
+```
+
+## 2. The curse of dimensionality, eq. (18.7)
+
+```{r curse}
+header("2. In high dimensions all points are equidistant (18.7)")
+set.seed(1802)
+cat(sprintf("  %14s%25s\n", "dimensions p", "(max-min)/min distance"))
+for (pp in c(2, 10, 100, 1000, 10000)) {
+  Xd <- matrix(rnorm(200*pp), 200)
+  D <- as.matrix(dist(Xd)); diag(D) <- NA
+  cat(sprintf("  %14s%25.4f\n", format(pp, big.mark = ","),
+              mean((apply(D, 1, max, na.rm=TRUE) - apply(D, 1, min, na.rm=TRUE)) /
+                     apply(D, 1, min, na.rm=TRUE))))
+}
+cat("\n  The contrast between nearest and farthest neighbour COLLAPSES. This is\n")
+cat("  why every scRNA-seq pipeline builds its neighbour graph in the top ~30\n")
+cat("  PCs, not in 20,000-dimensional gene space.\n")
+```
+
+## 3. Linkage and k-means, eq. (18.8)-(18.10)
+
+```{r linkage}
+header("3. Linkage choice changes the answer (18.8)-(18.10)")
+set.seed(1803)
+truth <- rep(1:3, c(80, 40, 15))
+centres <- rbind(c(0,0), c(5,0), c(2.5,4.5))
+Xb <- do.call(rbind, lapply(1:3, function(k)
+  matrix(rnorm(c(80,40,15)[k]*2, rep(centres[k,], each=c(80,40,15)[k]), 0.9),
+         ncol = 2)))
+adj_rand <- function(a, b) {
+  tab <- table(a, b); n <- sum(tab)
+  sum_comb <- function(x) sum(choose(x, 2))
+  idx <- sum_comb(tab); ea <- sum_comb(rowSums(tab)); eb <- sum_comb(colSums(tab))
+  exp_idx <- ea * eb / choose(n, 2)
+  (idx - exp_idx) / ((ea + eb)/2 - exp_idx)
+}
+D <- dist(Xb)
+cat(sprintf("  %-14s%25s\n", "linkage", "adjusted Rand vs truth"))
+for (meth in c("single", "complete", "average", "ward.D2"))
+  cat(sprintf("  %-14s%25.3f\n", meth,
+              adj_rand(truth, cutree(hclust(D, method = meth), 3))))
+km <- kmeans(Xb, 3, nstart = 25)
+cat(sprintf("  %-14s%25.3f\n", "k-means", adj_rand(truth, km$cluster)))
+cat("\n  Single linkage chains and usually fails on omics data. Ward.D2\n")
+cat("  REQUIRES Euclidean distance; applying it to a correlation distance is\n")
+cat("  not meaningful. (Note ward.D2 expects ORDINARY distances, ward.D\n")
+cat("  expects SQUARED ones - a common silent error.)\n")
+cat("\n  k-means depends on INITIALISATION. On these well-separated blobs even\n")
+cat("  nstart=1 succeeds, so a harder case is needed to see the problem -\n")
+cat("  6 overlapping clusters in 10 dimensions:\n")
+set.seed(18031)
+n_k <- 6
+cent <- matrix(rnorm(n_k * 10, 0, 1.3), n_k)
+truth_h <- rep(seq_len(n_k), each = 30)
+Xh <- cent[truth_h, ] + matrix(rnorm(n_k * 30 * 10, 0, 1.0), ncol = 10)
+cat(sprintf("    %-12s%12s%10s%14s\n", "nstart", "ARI mean", "ARI min", "failures/20"))
+for (ns in c(1, 5, 25)) {
+  aris <- sapply(1:20, function(s) {
+    set.seed(s); adj_rand(truth_h, kmeans(Xh, n_k, nstart = ns)$cluster) })
+  cat(sprintf("    %-12d%12.3f%10.3f%14s\n", ns, mean(aris), min(aris),
+              sprintf("%d/20", sum(aris < mean(aris) - 0.05))))
+}
+cat("    Lloyd's algorithm converges to a LOCAL optimum; nstart takes the best\n")
+cat("    of several random starts. Use nstart >= 25 and report the seed.\n")
+```
+
+## 4. Choosing K: silhouette, gap statistic, stability
+
+```{r choosing-k}
+header("4. How many clusters? (18.11)-(18.12) and stability")
+gap_statistic <- function(X, k_max = 8, B = 20) {
+  Wk <- function(X, k) { km <- kmeans(X, k, nstart = 10)
+                         sum(km$withinss) }
+  mins <- apply(X, 2, min); maxs <- apply(X, 2, max)
+  gaps <- sks <- numeric(k_max)
+  for (k in 1:k_max) {
+    logW <- log(Wk(X, k))
+    ref <- replicate(B, log(Wk(mapply(function(lo, hi) runif(nrow(X), lo, hi),
+                                      mins, maxs), k)))
+    gaps[k] <- mean(ref) - logW                                 # eq. (18.12)
+    sks[k] <- sd(ref) * sqrt(1 + 1/B)
+  }
+  list(gap = gaps, sk = sks)
+}
+cluster_stability <- function(X, k, n_boot = 40, frac = 0.8) {
+  base <- kmeans(X, k, nstart = 25)$cluster
+  mean(replicate(n_boot, {
+    idx <- sample(nrow(X), floor(frac*nrow(X)))
+    adj_rand(base[idx], kmeans(X[idx, ], k, nstart = 25)$cluster)
+  }))
+}
+set.seed(1804)
+gs <- gap_statistic(Xb, 8)
+cat(sprintf("  %3s%13s%9s%10s%18s\n", "K", "silhouette", "gap", "gap s_k", "stability (ARI)"))
+for (k in 2:8) {
+  lab <- kmeans(Xb, k, nstart = 25)$cluster
+  sil <- mean(silhouette(lab, D)[, 3])                          # eq. (18.11)
+  cat(sprintf("  %3d%13.3f%9.3f%10.3f%18.3f\n", k, sil, gs$gap[k], gs$sk[k],
+              cluster_stability(Xb, k)))
+}
+k_gap <- which(sapply(1:7, function(k) gs$gap[k] >= gs$gap[k+1] - gs$sk[k+1]))[1]
+cat(sprintf("\n  gap-statistic rule selects K = %d   (truth: 3)\n", k_gap))
+cat("\n  Negative control - ONE homogeneous Gaussian cloud, no clusters:\n")
+set.seed(1805)
+Xnull <- matrix(rnorm(135*2), 135)
+gn <- gap_statistic(Xnull, 6)
+for (k in 2:5) {
+  lab <- kmeans(Xnull, k, nstart = 25)$cluster
+  cat(sprintf("    K=%d: silhouette %.3f, gap %+.3f, stability %.3f\n", k,
+              mean(silhouette(lab, dist(Xnull))[, 3]), gn$gap[k],
+              cluster_stability(Xnull, k, n_boot = 20)))
+}
+cat("  Silhouette is POSITIVE even with no real structure - it ALWAYS finds\n")
+cat("  something. The gap statistic and stability are far more informative.\n")
+```
+
+## 5. Double dipping in clustering
+
+```{r double-dipping}
+header("5. Testing the features that defined the clusters")
+set.seed(1806)
+n <- 100; G <- 1500
+Xhom <- matrix(rnorm(n*G), n)               # ONE homogeneous population
+lab2 <- kmeans(Xhom, 2, nstart = 25)$cluster
+p_naive <- sapply(1:G, function(j) t.test(Xhom[lab2==1, j], Xhom[lab2==2, j])$p.value)
+cat(sprintf("  Data: ONE homogeneous Gaussian cloud (n=%d, p=%d), no subgroups.\n", n, G))
+cat(sprintf("  k-means K=2 cluster sizes: %s\n", paste(table(lab2), collapse = " ")))
+cat(sprintf("  'differential' features at p < 0.05 : %.1f%%  (should be 5%%)\n",
+            100*mean(p_naive < 0.05)))
+cat(sprintf("  surviving BH FDR 0.05               : %d\n",
+            sum(p.adjust(p_naive, "BH") < 0.05)))
+split_test <- function(X, seed = 1) {
+  ## Learn the separating direction on one half, apply it to the other.
+  set.seed(seed)
+  idx <- sample(nrow(X)); tr <- idx[1:(nrow(X)/2)]; te <- idx[-(1:(nrow(X)/2))]
+  km_tr <- kmeans(X[tr, ], 2, nstart = 25)
+  direction <- km_tr$centers[2, ] - km_tr$centers[1, ]
+  proj <- X[te, ] %*% direction
+  lt <- as.integer(proj > median(proj))
+  sapply(seq_len(ncol(X)), function(j) t.test(X[te, j][lt==0], X[te, j][lt==1])$p.value)
+}
+p_split <- split_test(Xhom)
+cat(sprintf("\n  With sample splitting (direction learned on half, tested on the other):\n"))
+cat(sprintf("    'differential' features at p < 0.05 : %.1f%%\n", 100*mean(p_split < 0.05)))
+cat(sprintf("    surviving BH FDR 0.05               : %d\n",
+            sum(p.adjust(p_split, "BH") < 0.05)))
+cat("\n  The decisive evidence against a noise cluster is FAILURE TO REPLICATE\n")
+cat("  on held-out data. In practice the damage is larger than the p-value\n")
+cat("  distribution suggests, because analysts report the TOP 'marker genes' -\n")
+cat("  precisely the features the clustering selected on (stats.md Topic 21).\n")
+```
+
+## 6. Figure
+
+```{r figure}
+png(file.path(OUT, "clustering.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+plot(Xb, col = truth, pch = 16, xlab = "", ylab = "",
+     main = "Three blobs of unequal size")
+ks <- 2:8
+plot(ks, sapply(ks, function(k) mean(silhouette(kmeans(Xb,k,nstart=25)$cluster, D)[,3])),
+     type = "b", pch = 16, col = "steelblue", ylim = c(0, 1), xlab = "K", ylab = "",
+     main = "Eq. (18.11): choosing K")
+lines(ks, sapply(ks, function(k) cluster_stability(Xb, k, n_boot = 20)),
+      type = "b", pch = 15, col = "darkorange")
+abline(v = 3, col = "red", lty = 2)
+legend("topright", c("silhouette", "stability (ARI)"), col = c("steelblue","darkorange"),
+       pch = c(16,15), bty = "n", cex = 0.7)
+hist(p_naive, breaks = 30, col = adjustcolor("steelblue", 0.6), border = "white",
+     main = "Double dipping on homogeneous data", xlab = "p-value")
+hist(p_split, breaks = 30, col = adjustcolor("darkorange", 0.6), border = "white", add = TRUE)
+abline(h = G/30, col = "red", lty = 2)
+legend("topright", c("cluster then test", "sample splitting", "uniform"),
+       fill = c(adjustcolor("steelblue",0.6), adjustcolor("darkorange",0.6), NA),
+       border = c("black","black",NA), lty = c(NA,NA,2), col = c(NA,NA,"red"),
+       bty = "n", cex = 0.65)
+plot(ks, gs$gap[ks], type = "b", pch = 16, col = "forestgreen", xlab = "K",
+     ylab = "gap", main = "Eq. (18.12): gap statistic")
+arrows(ks, gs$gap[ks]-gs$sk[ks], ks, gs$gap[ks]+gs$sk[ks], code = 3, angle = 90,
+       length = 0.03)
+abline(v = 3, col = "red", lty = 2)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "clustering.png"), "\n")
+```
+
+## Decision rules (from `stats.md` Topic 18)
+
+1. Pick the distance from the measurement scale.
+2. Cluster in a reduced space (top PCs) for high-dimensional data.
+3. Report K-selection evidence AND stability, not just a coloured plot.
+4. Never test the features that defined the clusters on the same data.
+5. Report seed, parameters and n_PCs for every embedding; quantify nothing
+   on embedding coordinates.
+
+**Next:** `19_batch_effects.R`

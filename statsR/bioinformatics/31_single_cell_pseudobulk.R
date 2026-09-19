@@ -1,0 +1,424 @@
+#' ---
+#' title: "Applied 31 - Single-cell RNA-seq: replicated inference"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 21, equations (21.1)-(21.4)
+#' **Core modules used:** 01 (pseudoreplication), 14 (mixed models), 18, 36
+#'
+#' ## Dataset card
+#'
+#' | | |
+#' |---|---|
+#' | **Real analogue** | Kang et al. 2018 (GSE96583): 8 lupus donors, PBMCs, +/- IFN-beta |
+#' | **Unit of inference** | **Donor** (8), not cell (~15,000) |
+#' | **Here** | Simulated with the same hierarchy |
+#'
+#' The literature is settled: preserve the donor as the replicate, via
+#' pseudobulk aggregation or a subject-aware mixed model. Naive per-cell tests
+#' produce a documented excess of false positives.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages({library(MASS); library(nlme)})
+MODULE_NAME <- "31_single_cell_pseudobulk"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. Simulate a multi-donor, multi-cell-type experiment
+#'
+#' Donor effects are gene-specific and SHARED by every cell of that donor -
+#' which is exactly what makes cells pseudoreplicates (eq. 1.4).
+
+#+ simulate
+header("1. Simulating a Kang-like multi-donor scRNA-seq experiment")
+simulate_sc <- function(n_donors_per_arm = 4, G = 1000, n_de = 100, lfc = 1,
+                        cell_types = c("CD4T", "CD14mono", "B"),
+                        base_props = c(0.55, 0.30, 0.15),
+                        da_effect = c(0, 0.5, -0.5)) {
+  donors <- sprintf("D%02d", seq_len(2*n_donors_per_arm) - 1)
+  arm <- setNames(rep(c("ctrl", "stim"), each = n_donors_per_arm), donors)
+  true_lfc <- numeric(G); de_idx <- sample(G, n_de)
+  true_lfc[de_idx] <- rnorm(n_de, 0, lfc)
+  base_expr <- exp(rnorm(G, -1.2, 1.4))
+  ct_mod <- lapply(cell_types, function(ct) exp(rnorm(G, 0, 0.5)))
+  names(ct_mod) <- cell_types
+  blocks <- list(); metas <- list()
+  for (d in donors) {
+    donor_eff <- rnorm(G, 0, 0.45)                 # SHARED by all this donor's cells
+    n_cells <- sample(400:900, 1)
+    shift <- if (arm[d] == "stim") da_effect else rep(0, length(cell_types))
+    logits <- log(base_props) + shift + rnorm(length(cell_types), 0, 0.25)
+    props <- exp(logits)/sum(exp(logits))
+    ct_assign <- sample(cell_types, n_cells, TRUE, prob = props)
+    depth <- rlnorm(n_cells, 0, 0.35)
+    for (ct in cell_types) {
+      sel <- ct_assign == ct; k <- sum(sel)
+      if (k == 0) next
+      eff <- if (ct == "CD14mono" && arm[d] == "stim") true_lfc*log(2) else 0
+      mu <- base_expr * ct_mod[[ct]] * exp(donor_eff + eff)
+      lam <- outer(mu, depth[sel])
+      blocks[[length(blocks)+1]] <- matrix(rpois(length(lam), lam), nrow = G)
+      metas[[length(metas)+1]] <- data.frame(donor = d, condition = arm[d],
+                                             cell_type = ct, depth = depth[sel])
+    }
+  }
+  counts <- do.call(cbind, blocks)
+  cell_meta <- do.call(rbind, metas)
+  rownames(cell_meta) <- sprintf("C%06d", seq_len(nrow(cell_meta)))
+  dimnames(counts) <- list(sprintf("G%04d", seq_len(G)), rownames(cell_meta))
+  cell_meta$condition <- factor(cell_meta$condition, levels = c("ctrl", "stim"))
+  list(counts = counts, cell_meta = cell_meta,
+       truth = data.frame(true_lfc = true_lfc, is_de = true_lfc != 0,
+                          row.names = rownames(counts)))
+}
+set.seed(3101)
+sim <- simulate_sc()
+X <- sim$counts; cell_meta <- sim$cell_meta; truth <- sim$truth
+stopifnot(identical(colnames(X), rownames(cell_meta)))        # eq. (2.1)
+cat(sprintf("  %d genes x %d cells from %d donors\n", nrow(X), ncol(X),
+            length(unique(cell_meta$donor))))
+print(head(table(cell_meta$donor, cell_meta$cell_type), 6))
+cat(sprintf("\n  n for CONDITION-level inference = %d donors, NOT %d cells\n",
+            length(unique(cell_meta$donor)), ncol(X)))
+cat(sprintf("  truly DE genes (in CD14mono only): %d\n", sum(truth$is_de)))
+
+#' ## 2. The naive per-cell test, and why it fails
+
+#+ per-cell
+header("2. Per-cell testing inflates false positives")
+per_cell_test <- function(X, cell_meta, cell_type) {
+  sel <- cell_meta$cell_type == cell_type
+  sub <- X[, sel, drop = FALSE]; cm <- cell_meta[sel, ]
+  logn <- log1p(t(t(sub)/colSums(sub)) * 1e4)     # standard log-normalisation
+  a <- logn[, cm$condition == "ctrl", drop = FALSE]
+  b <- logn[, cm$condition == "stim", drop = FALSE]
+  vapply(seq_len(nrow(logn)), function(i)
+    suppressWarnings(wilcox.test(a[i, ], b[i, ])$p.value), numeric(1))
+}
+for (row_ in list(list("CD14mono", TRUE), list("CD4T", FALSE))) {
+  ct <- row_[[1]]; has_signal <- row_[[2]]
+  p <- per_cell_test(X, cell_meta, ct)
+  rej <- p.adjust(p, "BH") < 0.05
+  ## The true DE genes were injected into CD14mono ONLY. In any other
+  ## compartment there is no condition effect at all, so EVERY rejection is
+  ## a false positive.
+  tp <- if (has_signal) sum(rej & truth$is_de) else 0
+  fp <- if (has_signal) sum(rej & !truth$is_de) else sum(rej)
+  cat(sprintf("  %-10s (%-21s): %4d 'DE' genes (TP=%3d, FP=%4d, FDP=%.3f)\n",
+              ct, if (has_signal) "real signal present" else "NO real signal at all",
+              sum(rej), tp, fp, fp/max(sum(rej), 1)))
+}
+cat("\n  Look at CD4T. There is NO condition effect there by construction, yet\n")
+cat("  the per-cell test calls a large fraction of the transcriptome\n")
+cat("  differential. Every one is a false positive, produced by donor-to-donor\n")
+cat("  variation counted as within-group noise across pseudoreplicated cells.\n")
+sel <- cell_meta$cell_type == "CD4T"
+sub <- X[, sel]; cm <- cell_meta[sel, ]
+logn <- log1p(t(t(sub)/colSums(sub))*1e4)
+g <- order(-rowMeans(logn))[50]
+vals <- logn[g, ]
+between <- var(tapply(vals, cm$donor, mean))
+within <- mean(tapply(vals, cm$donor, var))
+icc <- between/(between + within)
+m_bar <- mean(table(cm$donor))
+cat(sprintf("\n  For a representative CD4T gene:\n"))
+cat(sprintf("    ICC (eq. 1.7)           = %.4f\n", icc))
+cat(sprintf("    mean cells per donor    = %.0f\n", m_bar))
+cat(sprintf("    design effect (eq. 1.8) = %.1f\n", 1 + (m_bar-1)*icc))
+cat(sprintf("    SE understated by       = %.1fx\n", sqrt(1 + (m_bar-1)*icc)))
+
+#' ## 3. Pseudobulk aggregation, eq. (21.1)
+#'
+#' **Sum RAW counts, do not average normalised values.** Summing keeps the
+#' count nature AND the information about how many cells contributed.
+
+#+ pseudobulk
+header("3. Pseudobulk by (cell type x donor), eq. (21.1)")
+make_pseudobulk <- function(X, cell_meta, cell_type, min_cells = 10) {
+  sel <- cell_meta$cell_type == cell_type
+  sub <- X[, sel, drop = FALSE]; cm <- cell_meta[sel, ]
+  n_cells <- table(cm$donor)
+  keep <- names(n_cells)[n_cells >= min_cells]
+  pb <- sapply(keep, function(d) rowSums(sub[, cm$donor == d, drop = FALSE]))
+  meta <- data.frame(condition = sapply(keep, function(d) as.character(cm$condition[cm$donor == d][1])),
+                     n_cells = as.integer(n_cells[keep]), row.names = keep)
+  meta$condition <- factor(meta$condition, levels = c("ctrl", "stim"))
+  list(pb = pb, meta = meta)
+}
+pbo <- make_pseudobulk(X, cell_meta, "CD14mono")
+print(pbo$meta)
+cat(sprintf("\n  pseudobulk matrix: %d genes x %d SAMPLES\n", nrow(pbo$pb), ncol(pbo$pb)))
+cat("  n is now the number of DONORS. This is the whole point.\n")
+cat(sprintf("\n  summed library sizes range over donors: %s - %s UMIs\n",
+            format(min(colSums(pbo$pb)), big.mark=","),
+            format(max(colSums(pbo$pb)), big.mark=",")))
+cat("  The library size CARRIES the cell count, so the NB model automatically\n")
+cat("  trusts big pseudobulks more. Averaging normalised values discards that\n")
+cat("  and gives a 3-cell sample equal influence.\n")
+
+#' ## 4. Three valid analyses compared
+
+#+ compare
+header("4. Pseudobulk vs mixed model vs naive (21.1)-(21.2)")
+pseudobulk_nb <- function(pb, meta, min_count = 10) {
+  lib <- colSums(pb)
+  keep <- rowSums(pb) >= min_count & rowSums(pb > 0) >= 3
+  sub <- pb[keep,, drop = FALSE]
+  cond <- as.numeric(meta$condition == "stim")
+  Xd <- cbind(1, cond)
+  ## One shared dispersion, estimated from the residual spread on the log scale.
+  logy <- log2(t(t(sub)/lib) + 1e-6)
+  resid <- t(logy) - Xd %*% qr.coef(qr(Xd), t(logy))
+  phi <- max(median(colSums(resid^2)/(length(cond) - 2)) * log(2)^2, 0.01)
+  res <- t(vapply(seq_len(nrow(sub)), function(i) {
+    f <- try(glm(sub[i, ] ~ cond, family = negative.binomial(1/phi),
+                 offset = log(lib)), silent = TRUE)
+    if (inherits(f, "try-error")) return(c(NA, 1))
+    cs <- coef(summary(f, dispersion = 1))          # see Module 30, section 5
+    c(cs["cond", 1]/log(2), cs["cond", 4])
+  }, numeric(2)))
+  out <- data.frame(lfc = res[, 1], pvalue = res[, 2], row.names = rownames(sub))
+  out$padj <- p.adjust(out$pvalue, "BH")
+  list(res = out, phi = phi)
+}
+nb_out <- pseudobulk_nb(pbo$pb, pbo$meta)
+res_nb <- nb_out$res
+p_naive <- per_cell_test(X, cell_meta, "CD14mono")
+score <- function(p_or_res, label) {
+  if (is.data.frame(p_or_res)) { padj <- p_or_res$padj; idx <- rownames(p_or_res) }
+  else { padj <- p.adjust(p_or_res, "BH"); idx <- rownames(truth) }
+  t0 <- truth[idx, ]
+  rej <- !is.na(padj) & padj < 0.05
+  tp <- sum(rej & t0$is_de); fp <- sum(rej & !t0$is_de)
+  cat(sprintf("  %-40s%7d%7d%7d%9.2f%8.3f\n", label, sum(rej), tp, fp,
+              tp/max(sum(t0$is_de), 1), fp/max(sum(rej), 1)))
+}
+cat(sprintf("  estimated pseudobulk dispersion = %.4f\n\n", nb_out$phi))
+cat(sprintf("  %-40s%7s%7s%7s%9s%8s\n", "method", "rej", "TP", "FP", "sens", "FDP"))
+score(p_naive, "naive per-cell Wilcoxon")
+score(res_nb, "pseudobulk + NB GLM (21.1)")
+cat("\n  Read this honestly: the pseudobulk FDP is not exactly 0.05 either -\n")
+cat("  with few rejections, two or three false ones move it a long way. That\n")
+cat("  is Monte-Carlo noise on a small denominator, not a failure of FDR\n")
+cat("  control. The naive test's FDP is a different animal: a SYSTEMATIC\n")
+cat("  breakdown, not sampling variation.\n")
+
+## A donor-aware mixed model on a gene subset, to show the answers agree.
+subset_genes <- c(head(rownames(truth)[truth$is_de], 30),
+                  head(rownames(truth)[!truth$is_de], 30))
+sel <- cell_meta$cell_type == "CD14mono"
+sub <- X[subset_genes, sel, drop = FALSE]; cm <- cell_meta[sel, ]
+cm$ln_depth <- log(colSums(X[, sel]))
+p_glmm <- vapply(subset_genes, function(g) {
+  d <- data.frame(y = log1p(sub[g, ]/exp(cm$ln_depth)*1e4),
+                  stim = as.numeric(cm$condition == "stim"), donor = cm$donor)
+  f <- try(lme(y ~ stim, random = ~ 1 | donor, data = d), silent = TRUE)
+  if (inherits(f, "try-error")) NA else summary(f)$tTable["stim", "p-value"]
+}, numeric(1))
+q_glmm <- p.adjust(p_glmm, "BH")
+q_pb <- res_nb[subset_genes, "padj"]
+cat(sprintf("\n  On a 60-gene subset (30 DE, 30 null):\n"))
+cat(sprintf("    donor-aware mixed model : %d rejected, %d true\n",
+            sum(q_glmm < 0.05, na.rm = TRUE),
+            sum(q_glmm < 0.05 & truth[subset_genes, "is_de"], na.rm = TRUE)))
+cat(sprintf("    pseudobulk NB           : %d rejected, %d true\n",
+            sum(q_pb < 0.05, na.rm = TRUE),
+            sum(q_pb < 0.05 & truth[subset_genes, "is_de"], na.rm = TRUE)))
+cat(sprintf("    rank correlation of p-values: %.3f\n",
+            cor(p_glmm, res_nb[subset_genes, "pvalue"], method = "spearman",
+                use = "complete.obs")))
+cat("\n  The two donor-aware approaches agree closely. Pseudobulk is far\n")
+cat("  cheaper and easier to audit, which is why it is the default.\n")
+
+#' ## 5. Differential abundance is a separate, compositional question, eq. (21.4)
+
+#+ abundance
+header("5. Differential ABUNDANCE of cell types (21.3)-(21.4)")
+comp <- table(cell_meta$donor, cell_meta$cell_type)
+donor_cond <- sapply(rownames(comp), function(d)
+  as.character(cell_meta$condition[cell_meta$donor == d][1]))
+props <- prop.table(comp, 1)
+cat("  Cell-type proportions per donor:\n")
+print(round(props, 3))
+cat("\n  TRUE log-odds shifts in the stim arm: CD4T 0.0, CD14mono +0.5, B -0.5\n")
+cat(sprintf("\n  %-12s%11s%11s%18s%24s\n", "cell type", "mean ctrl", "mean stim",
+            "t-test on props", "NB with offset (21.4)"))
+for (ct in colnames(comp)) {
+  pc <- props[donor_cond == "ctrl", ct]; ps <- props[donor_cond == "stim", ct]
+  d <- data.frame(y = as.numeric(comp[, ct]), total = as.numeric(rowSums(comp)),
+                  stim = as.numeric(donor_cond == "stim"))
+  f <- glm(y ~ stim, data = d, family = negative.binomial(10), offset = log(total))
+  cat(sprintf("  %-12s%11.3f%11.3f%18.4f%24.4f\n", ct, mean(pc), mean(ps),
+              t.test(pc, ps)$p.value, coef(summary(f, dispersion = 1))["stim", 4]))
+}
+drift <- mean(props[donor_cond == "stim", "CD4T"]) - mean(props[donor_cond == "ctrl", "CD4T"])
+cat(sprintf("\n  The COMPOSITIONAL trap (eq. 2.7). CD4T has NO true effect, yet its\n"))
+cat(sprintf("  mean proportion drifted by %+.3f, purely because the other two moved\n", drift))
+cat("  and the three proportions must sum to 1. That drift is a SYSTEMATIC\n")
+cat("  bias, not noise, so it does NOT average away: add donors and it becomes\n")
+cat("  a confident false positive.\n")
+cat("\n  Relative abundance cannot distinguish 'monocytes expanded' from\n")
+cat("  'everything else contracted' without an absolute measurement - spike-ins,\n")
+cat("  counting beads, or cytometry counts. Module 36 develops the log-ratio\n")
+cat("  machinery for exactly this problem.\n")
+
+#' ## 6. Minimum-cell thresholds
+
+#+ min-cells
+header("6. The minimum-cell rule")
+cat(sprintf("  %11s%13s%11s%6s%6s%8s\n", "min cells", "donors kept", "rejected",
+            "TP", "FP", "FDP"))
+for (mc in c(1, 10, 50, 200)) {
+  pbx <- make_pseudobulk(X, cell_meta, "B", min_cells = mc)
+  if (ncol(pbx$pb) < 4 || nlevels(droplevels(pbx$meta$condition)) < 2) {
+    cat(sprintf("  %11d%13d   too few donors to analyse\n", mc, ncol(pbx$pb))); next
+  }
+  r <- pseudobulk_nb(pbx$pb, pbx$meta)$res
+  t0 <- truth[rownames(r), ]
+  rej <- !is.na(r$padj) & r$padj < 0.05
+  ## B cells have NO true differential state, so this is a negative control.
+  cat(sprintf("  %11d%13d%11d%6d%6d%8.3f\n", mc, ncol(pbx$pb), sum(rej),
+              sum(rej & t0$is_de), sum(rej & !t0$is_de), sum(rej & !t0$is_de)/max(sum(rej),1)))
+}
+cat("\n  The B compartment has no true effect, so this is a negative control.\n")
+cat("  Set the minimum-cell rule BEFORE looking at the outcome (10 is a common\n")
+cat("  default), and report how many sample x cell-type combinations it removed.\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "single_cell.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+pb_c <- make_pseudobulk(X, cell_meta, "CD4T")
+r_c <- pseudobulk_nb(pb_c$pb, pb_c$meta)$res
+hist(per_cell_test(X, cell_meta, "CD4T"), breaks = 40,
+     col = adjustcolor("firebrick", 0.6), border = "white",
+     main = "Negative control: CD4T has no effect", xlab = "p-value")
+hist(r_c$pvalue, breaks = 40, col = adjustcolor("steelblue", 0.6),
+     border = "white", add = TRUE)
+legend("top", c("naive per-cell", "pseudobulk"),
+       fill = c(adjustcolor("firebrick",0.6), adjustcolor("steelblue",0.6)),
+       bty = "n", cex = 0.6)
+t_de <- truth[rownames(res_nb), "is_de"]
+plot(res_nb$lfc, -log10(res_nb$pvalue), pch = 16, cex = 0.3,
+     col = ifelse(t_de, "firebrick", adjustcolor("grey50", 0.4)),
+     xlab = "pseudobulk log2 FC", ylab = "-log10 p",
+     main = "Pseudobulk volcano (CD14mono)")
+matplot(t(props), type = "p", pch = 16, col = ifelse(donor_cond == "stim", "darkorange", "steelblue"),
+        xaxt = "n", xlab = "", ylab = "proportion of cells",
+        main = "Eq. (21.4): composition is constrained")
+axis(1, seq_len(ncol(props)), colnames(props))
+plot(pbo$meta$n_cells, colSums(pbo$pb), pch = 16, col = "steelblue", cex = 1.2,
+     xlab = "cells in the pseudobulk", ylab = "total UMIs",
+     main = "Eq. (21.1): summing preserves the cell count")
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "single_cell.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: Donors vs cells per donor
+#'
+#' Compare the power of the pseudobulk analysis at 3, 5 and 8 donors per arm.
+#' Connect your answer to eq. (1.6) and (9.7).
+
+#+ problem1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# for (nd in c(3, 5, 8)) {
+#   set.seed(500 + nd)
+#   s <- simulate_sc(n_donors_per_arm = nd)
+#   pbx <- make_pseudobulk(s$counts, s$cell_meta, "CD14mono")
+#   r <- pseudobulk_nb(pbx$pb, pbx$meta)$res
+#   t0 <- s$truth[rownames(r), ]
+#   rej <- !is.na(r$padj) & r$padj < 0.05
+#   cat(sprintf("  %d donors/arm: %4d rejected, sens=%.2f, FDP=%.3f\n", nd, sum(rej),
+#               sum(rej & t0$is_de)/max(sum(t0$is_de),1),
+#               sum(rej & !t0$is_de)/max(sum(rej),1)))
+# }
+#
+# ## Donors dominate. Eq. (1.6) says Var(mean) -> sigma_b^2/n_donors no matter
+# ## how many cells you sequence, and eq. (9.7) says the cost-optimal cells per
+# ## donor is modest whenever donor variability is large - which it always is in
+# ## human studies. Three donors cannot be rescued by a million cells.
+
+#' ### Problem 2: Marker genes are not condition effects
+#'
+#' Cluster the CD4T cells with k-means on the top PCs, then test for "markers"
+#' between clusters. Compare the p-value histogram to the valid pseudobulk
+#' condition test. Explain using Module 18.
+
+#+ problem2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sel <- cell_meta$cell_type == "CD4T"
+# sub <- X[, sel]
+# logn <- log1p(t(t(sub)/colSums(sub))*1e4)
+# pcs <- prcomp(t(logn), center = TRUE, rank. = 15)$x
+# lab <- kmeans(pcs, 2, nstart = 25)$cluster
+# p_marker <- vapply(seq_len(nrow(logn)), function(i)
+#   t.test(logn[i, lab == 1], logn[i, lab == 2])$p.value, numeric(1))
+# cat(sprintf("  cluster 'markers' at p<0.05 : %.1f%%\n", 100*mean(p_marker < 0.05)))
+# cat(sprintf("  surviving BH FDR 0.05       : %d\n",
+#             sum(p.adjust(p_marker, "BH") < 0.05)))
+# pb_c2 <- make_pseudobulk(X, cell_meta, "CD4T")
+# r_c2 <- pseudobulk_nb(pb_c2$pb, pb_c2$meta)$res
+# cat(sprintf("  valid pseudobulk condition test, p<0.05: %.1f%%\n",
+#             100*mean(r_c2$pvalue < 0.05, na.rm = TRUE)))
+#
+# ## The clusters were DEFINED by the same expression values being tested, so
+# ## essentially every gene comes out "significant" (Module 18, double dipping).
+# ## Cluster markers DESCRIBE the clustering; they are not evidence about the
+# ## conditions.
+
+#' ### Problem 3: Mean-of-normalised vs sum-of-counts pseudobulk
+#'
+#' Build a pseudobulk by AVERAGING log-normalised expression, analyse with a
+#' t-test, and compare. Then down-sample one donor's CD14mono cells to 15 and
+#' see which method is more disturbed.
+
+#+ problem3
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sel <- cell_meta$cell_type == "CD14mono"
+# sub <- X[, sel]; cm <- cell_meta[sel, ]
+# ln <- log1p(t(t(sub)/colSums(sub))*1e4)
+# pbm <- sapply(unique(cm$donor), function(d) rowMeans(ln[, cm$donor == d, drop = FALSE]))
+# cond_m <- sapply(unique(cm$donor), function(d) as.character(cm$condition[cm$donor == d][1]))
+# p_mean <- vapply(seq_len(nrow(pbm)), function(i)
+#   t.test(pbm[i, cond_m == "ctrl"], pbm[i, cond_m == "stim"])$p.value, numeric(1))
+# q_mean <- p.adjust(p_mean, "BH")
+# cat(sprintf("  mean-of-normalised: %d rejected, %d true\n", sum(q_mean < 0.05),
+#             sum(q_mean < 0.05 & truth$is_de)))
+# score(res_nb, "sum-of-counts + NB GLM")
+#
+# ## Now cripple one donor: keep only 15 of its CD14mono cells.
+# set.seed(1)
+# bad <- which(cm$donor == "D00")
+# drop <- sample(bad, max(length(bad) - 15, 0))
+# keep_mask <- !(colnames(X) %in% colnames(sub)[drop])
+# pbk <- make_pseudobulk(X[, keep_mask], cell_meta[keep_mask, ], "CD14mono", min_cells = 1)
+# cat(sprintf("  after crippling D00 to 15 cells: its pseudobulk library size is\n"))
+# cat(sprintf("    %s UMIs vs a median of %s across donors\n",
+#             format(sum(pbk$pb[, "D00"]), big.mark = ","),
+#             format(median(colSums(pbk$pb)), big.mark = ",")))
+#
+# ## The NB model AUTOMATICALLY down-weights D00 via the offset, because its
+# ## library size is tiny. The mean-of-normalised pseudobulk gives D00 exactly
+# ## the same weight as a 900-cell donor, so one noisy donor can drive the whole
+# ## result.
+
+#' ## What to take away
+#'
+#' 1. **Donors are replicates. Cells are measurements.** Always.
+#' 2. Pseudobulk by (cell type x sample) with SUMS of raw counts; require a
+#'    pre-specified minimum cell count; analyse with bulk tools.
+#' 3. Differential state != differential abundance != cluster markers (21.3).
+#' 4. Treat abundance compositionally.
+#' 5. Multiplicity family = genes x cell types x contrasts.
+#'
+#' **Next:** `32_cytometry_differential_abundance.R`

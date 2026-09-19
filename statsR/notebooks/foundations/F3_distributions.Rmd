@@ -1,0 +1,375 @@
+---
+title: "Foundations 3 - Distributions"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Part 0, §0.5, equation (0.10)
+**Assumes:** `F1`, `F2`.
+
+## What a distribution is
+
+A **distribution** answers: which values does this variable take, and how
+often? The mean and SD are two summaries of it; the distribution is the
+whole picture.
+
+You do not need to memorise formulas. You need to recognise **which
+situation produces which shape**, because that decides which method is
+valid. Each distribution below corresponds to a *mechanism*, and naming the
+mechanism usually names the method.
+
+```{r setup, message = FALSE}
+MODULE_NAME <- "F3_distributions"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(103)
+
+## A small text histogram, so you can see shapes without opening a plot.
+sparkline <- function(v, bins = 28, height = 7) {
+  h <- hist(v, breaks = bins, plot = FALSE)
+  cnt <- h$counts/max(h$counts)
+  for (lev in height:1)
+    cat("    |", paste(ifelse(cnt*height >= lev - 0.5, "#", " "), collapse = ""), "\n", sep = "")
+  cat("    +", strrep("-", length(cnt)), "\n", sep = "")
+  cat(sprintf("     %-*.1f%*.1f\n", length(cnt) %/% 2, min(h$breaks),
+              length(cnt) - length(cnt) %/% 2, max(h$breaks)))
+}
+```
+
+## 1. The normal distribution: what averages look like
+
+```{r normal}
+header("1. Normal: the bell curve")
+MU <- 100; SIGMA <- 15
+x <- rnorm(200000, MU, SIGMA)
+cat(sprintf("  X ~ Normal(mu = %d, sigma = %d)\n", MU, SIGMA))
+sparkline(x)
+cat(sprintf("\n  %-12s%10s%12s\n", "within", "theory", "observed"))
+for (k in 1:3) {
+  theory <- c(0.6827, 0.9545, 0.9973)[k]
+  cat(sprintf("  %-12s%10.4f%12.4f\n", paste(k, "sigma"), theory,
+              mean(abs(x - MU) < k*SIGMA)))
+}
+cat("
+  The 68 / 95 / 99.7 rule. Worth memorising - it turns any normal-ish number
+  into an instant sanity check.
+
+  The normal distribution is everywhere NOT because biological measurements
+  are naturally bell-shaped (mostly they are not) but because AVERAGES are,
+  whatever the raw data looks like. That is the central limit theorem (F4).\n")
+```
+
+## 2. Binomial: counting successes out of $n$ tries
+
+```{r binomial}
+header("2. Binomial: how many out of n?")
+n_trials <- 50; p_success <- 0.30
+b <- rbinom(200000, n_trials, p_success)
+cat(sprintf("  X ~ Binomial(n = %d, p = %.2f)\n", n_trials, p_success))
+sparkline(b)
+cat(sprintf("\n  %-28s%-16s%10s%12s\n", "quantity", "formula", "theory", "observed"))
+cat(sprintf("  %-28s%-16s%10.3f%12.3f\n", "mean", "n*p", n_trials*p_success, mean(b)))
+cat(sprintf("  %-28s%-16s%10.3f%12.3f\n", "variance", "n*p*(1-p)",
+            n_trials*p_success*(1-p_success), var(b)))
+cat("
+  Note the variance formula: it is LARGEST at p = 0.5 and shrinks towards 0 as
+  p approaches 0 or 1. A proportion near 0 or 1 is intrinsically less variable
+  than one near a half - which is why the uncertainty on a proportion is not
+  the same at every level, and why proportions get their own model (Topic 13)
+  rather than being fed to a t-test.\n")
+for (p_ in c(0.02, 0.5, 0.98))
+  cat(sprintf("    p = %-5.2f variance = %6.2f\n", p_, n_trials*p_*(1-p_)))
+```
+
+## 3. Poisson: counting events in a window, eq. (0.10)
+
+```{r poisson}
+header("3. Poisson: mean equals variance (0.10)")
+for (lam in c(2, 10, 100)) {
+  po <- rpois(200000, lam)
+  cat(sprintf("  lambda = %-5d mean = %8.3f   variance = %8.3f   ratio = %.3f\n",
+              lam, mean(po), var(po), var(po)/mean(po)))
+}
+sparkline(rpois(200000, 10))
+cat("
+  mean = variance is the Poisson's signature, and its weakness. It leaves NO
+  freedom: tell me the mean and I have told you the spread.
+
+  Notice also that as lambda grows the shape becomes symmetric and bell-like.
+  A Poisson with a large mean is well approximated by a normal - which is why
+  high-count genes can be treated more casually than low-count ones.\n")
+```
+
+## 4. Negative binomial: counts in the real world
+
+```{r negbin}
+header("4. Negative binomial: Poisson plus biological variability")
+MEAN <- 100
+cat(sprintf("  All of these have the same mean (%d). Only the spread differs.\n\n", MEAN))
+cat(sprintf("  %-40s%9s%11s%10s\n", "model", "mean", "variance", "var/mean"))
+pois <- rpois(200000, MEAN)
+cat(sprintf("  %-40s%9.1f%11.1f%10.2f\n", "Poisson (technical noise only)",
+            mean(pois), var(pois), var(pois)/mean(pois)))
+for (disp in c(0.05, 0.2, 0.5)) {
+  ## A negative binomial IS a Poisson whose rate varies between samples.
+  ## Simulate it exactly that way, so the mechanism is visible.
+  rate <- rgamma(200000, shape = 1/disp, scale = MEAN*disp)
+  nb <- rpois(200000, rate)
+  cat(sprintf("  %-40s%9.1f%11.1f%10.2f\n",
+              sprintf("Neg. binomial, dispersion = %.2f", disp),
+              mean(nb), var(nb), var(nb)/mean(nb)))
+}
+cat(sprintf("
+  Var = mu + dispersion * mu^2. The first term is counting noise; the second
+  is biological variability between samples, and it dominates at high counts.
+
+  This is THE reason RNA-seq is analysed with DESeq2 or edgeR rather than a
+  t-test or a Poisson model. Use Poisson on data that is really negative
+  binomial and you understate the variance badly - at mean %d with dispersion
+  0.2, by a factor of %.0f. Every p-value inherits that error.
+
+  Topic 20 is about estimating that dispersion when you have 3 samples, which
+  is the central technical difficulty of differential expression.\n",
+  MEAN, (MEAN + 0.2*MEAN^2)/MEAN))
+```
+
+## 5. Uniform: and the most useful diagnostic in this course
+
+```{r uniform}
+header("5. Uniform: p-values under the null are flat")
+null_p <- replicate(20000, t.test(rnorm(10), rnorm(10))$p.value)
+cat("  20,000 t-tests on data with NO real difference:\n")
+sparkline(null_p)
+cat(sprintf("\n  %-18s%8.4f   (should be 0.05)\n", "p < 0.05", mean(null_p < 0.05)))
+cat(sprintf("  %-18s%8.4f   (should be 0.10)\n", "p < 0.10", mean(null_p < 0.10)))
+cat(sprintf("  %-18s%8.4f   (should be 0.50)\n", "p < 0.50", mean(null_p < 0.50)))
+real_p <- replicate(20000, t.test(rnorm(10, 0.9), rnorm(10))$p.value)
+cat("\n  The same test when there IS a real difference:\n")
+sparkline(real_p)
+cat("
+  FLAT means the test is behaving. SPIKED AT ZERO means there is signal.
+
+  That gives you a diagnostic you can use on any analysis: plot a histogram of
+  all your p-values. If you expect mostly nulls and it is NOT flat, something
+  is wrong - unmodelled batch, non-independence, a broken assumption. If it
+  slopes upward towards 1, your test is conservative. A p-value histogram is
+  the cheapest and most informative plot in genomics (Topic 8).\n")
+```
+
+## 6. Distributions of *statistics*, not measurements
+
+```{r tdist}
+header("6. t, chi-squared and F describe test statistics")
+cat("  The t distribution is the normal's heavier-tailed cousin. It is what\n")
+cat("  you get when you must ESTIMATE sigma instead of knowing it.\n\n")
+cat(sprintf("  %-8s%14s%24s\n", "df", "P(|t| > 2)", "P(|t| > 2) if normal"))
+for (df in c(2, 5, 10, 30, 1000))
+  cat(sprintf("  %-8d%14.4f%24.4f\n", df, 2*pt(2, df, lower.tail = FALSE),
+              2*pnorm(2, lower.tail = FALSE)))
+cat("
+  With few degrees of freedom the tails are FATTER - extreme values are more
+  likely than a normal would suggest. That is exactly right: when you have
+  little data, your estimate of sigma is itself unreliable, and the t
+  distribution builds in that extra doubt.
+
+  As df grows, t converges on the normal. By df = 30 the difference barely
+  matters, which is the origin of the folklore that 'n = 30 is enough'.
+
+  The practical consequence: with a small sample, the critical value for a 95%
+  interval is not 1.96 but something larger, so your interval is WIDER. Small
+  studies are automatically made more humble - if you use the right
+  distribution.\n")
+```
+
+## 7. Skew, and why biology uses logs
+
+```{r skew}
+header("7. Skewed data, and what the log transform does")
+expr <- rlnorm(200000, log(50), 1.1)
+cat("  A typical gene expression variable (right-skewed):\n")
+sparkline(expr)
+cat(sprintf("\n  mean   = %8.1f\n  median = %8.1f   <- much less than the mean\n",
+            mean(expr), median(expr)))
+cat(sprintf("  %.1f%% of values are BELOW the mean\n", 100*mean(expr < mean(expr))))
+cat("\n  The same data after taking logs:\n")
+sparkline(log2(expr))
+cat(sprintf("\n  mean   = %8.2f\n  median = %8.2f   <- now they agree\n",
+            mean(log2(expr)), median(log2(expr))))
+cat(sprintf("  %.1f%% of values are below the mean\n",
+            100*mean(log2(expr) < mean(log2(expr)))))
+cat("
+  For the raw variable, 'the mean' is not a typical value - a minority of
+  large values drags it above most of the data. Reporting mean +/- SD here
+  would be actively misleading.
+
+  The log fixes it, and not by accident. Biological quantities tend to vary
+  MULTIPLICATIVELY - a treatment doubles expression, it does not add 40 units
+  - and the log turns multiplication into addition. That converts skewed,
+  proportional variation into symmetric, additive variation, which is exactly
+  what the standard toolkit is built for.
+
+  This is why expression is analysed as log2 fold change, why concentrations
+  are logged, and why '2-fold change' is a more natural unit than '+50'.\n")
+```
+
+## 8. Figure
+
+```{r figure}
+png(file.path(OUT, "distributions.png"), width = 1250, height = 780, res = 110)
+par(mfrow = c(2, 3), mar = c(4.2, 4.2, 2.6, 1))
+hist(x, breaks = 70, col = "steelblue", border = NA, main = "Normal: 68 / 95 rule",
+     xlab = "value", freq = FALSE)
+for (k in 1:2) abline(v = MU + c(-1, 1)*k*SIGMA, col = "firebrick", lty = 2)
+hist(b, breaks = 30, col = "seagreen", border = NA, freq = FALSE,
+     main = sprintf("Binomial(n=%d, p=%.1f)", n_trials, p_success), xlab = "successes")
+plot(0:60, dpois(0:60, 10), type = "h", col = "darkorange", lwd = 2,
+     main = "Poisson: mean = variance", xlab = "count", ylab = "probability")
+lines(0:60, dpois(0:60, 2), type = "h", col = "steelblue", lwd = 2)
+legend("topright", c("lambda=2", "lambda=10"), col = c("steelblue", "darkorange"),
+       lwd = 2, bty = "n", cex = 0.7)
+grid_ <- 0:320
+plot(grid_, dpois(grid_, MEAN), type = "l", lwd = 2, col = "steelblue",
+     main = "Same mean, different spread", xlab = "count", ylab = "probability")
+for (i in seq_along(c(0.05, 0.3))) {
+  disp <- c(0.05, 0.3)[i]
+  lines(grid_, dnbinom(grid_, size = 1/disp, mu = MEAN), lwd = 2,
+        col = c("darkorange", "firebrick")[i])
+}
+legend("topright", c("Poisson", "NB 0.05", "NB 0.3"),
+       col = c("steelblue", "darkorange", "firebrick"), lwd = 2, bty = "n", cex = 0.7)
+hist(null_p, breaks = 40, col = "grey70", border = NA, freq = FALSE,
+     main = "p-values: flat under the null", xlab = "p-value")
+hist(real_p, breaks = 40, col = adjustcolor("firebrick", 0.6), border = NA,
+     freq = FALSE, add = TRUE)
+abline(h = 1, lty = 2)
+hist(log2(expr), breaks = 70, col = "seagreen", border = NA, freq = FALSE,
+     main = "Skewed data, after log2", xlab = "log2(expression)")
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "distributions.png"), "\n")
+```
+
+# PROBLEMS
+
+### Problem 1: How wrong is Poisson on real count data?
+
+```{r problem1}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# poisson_test <- function(a, b) {
+#   ## Compare two groups of counts ASSUMING Poisson (variance = mean).
+#   ma <- mean(a); mb <- mean(b)
+#   se <- sqrt(ma/length(a) + mb/length(b))
+#   2*pnorm(abs(ma - mb)/max(se, 1e-9), lower.tail = FALSE)
+# }
+# cat(sprintf("  %-20s%10s%22s\n", "true dispersion", "var/mean", "false positive rate"))
+# for (disp in c(0, 0.05, 0.2, 0.5)) {
+#   hits <- 0; ratios <- numeric(3000)
+#   for (i in 1:3000) {
+#     if (disp == 0) { a <- rpois(6, 100); b <- rpois(6, 100) }
+#     else {
+#       a <- rpois(6, rgamma(6, 1/disp, scale = 100*disp))
+#       b <- rpois(6, rgamma(6, 1/disp, scale = 100*disp))
+#     }
+#     ratios[i] <- var(c(a, b))/mean(c(a, b))
+#     hits <- hits + (poisson_test(a, b) < 0.05)
+#   }
+#   cat(sprintf("  %-20.2f%10.1f%21.1f%%\n", disp, mean(ratios), 100*hits/3000))
+# }
+#
+# ## With genuinely Poisson data the test is correct - about 5%. Add even
+# ## modest overdispersion and the false positive rate climbs steeply, because
+# ## the test divides by a standard error that is far too small.
+# ##
+# ## THE GROUPS ARE IDENTICAL IN EVERY ROW. Every "discovery" is false. This is
+# ## what happens when you analyse RNA-seq with a model that assumes counting
+# ## noise is the only noise, and it is why DESeq2 and edgeR spend most of
+# ## their effort estimating the dispersion rather than testing.
+```
+
+### Problem 2: When does the normal approximation start working?
+
+```{r problem2}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# skewness <- function(v) mean((v - mean(v))^3)/sd(v)^3
+# cat(sprintf("  %-14s%12s%18s%14s\n", "n averaged", "skewness",
+#             "P(within 2 SD)", "normal says"))
+# for (n in c(1, 2, 5, 15, 50, 200)) {
+#   m <- replicate(40000, mean(rlnorm(n, 0, 1.8)))
+#   z <- (m - mean(m))/sd(m)
+#   cat(sprintf("  %-14d%12.2f%18.3f%14.3f\n", n, skewness(m),
+#               mean(abs(z) < 2), 0.9545))
+# }
+#
+# ## Skewness measures asymmetry; 0 is symmetric. It falls steadily towards 0
+# ## as n grows, and the coverage climbs towards the normal's 95.45%.
+# ##
+# ## Two lessons. First, the CLT really works - even this source becomes
+# ## bell-shaped. Second, "n = 30 is enough" is FOLKLORE, not a theorem: for a
+# ## source this skewed, n = 50 is still visibly off. The nastier the source,
+# ## the larger n must be. When in doubt use a method that does not rely on the
+# ## approximation at all - a permutation test or a bootstrap (Topics 7, 5).
+```
+
+### Problem 3: Reading a p-value histogram
+
+```{r problem3}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# cases <- list()
+# cases[["all null, correct test"]] <-
+#   replicate(4000, t.test(rnorm(8), rnorm(8))$p.value)
+# cases[["10% real effects"]] <-
+#   sapply(1:4000, function(i) t.test(rnorm(8, if (i %% 10 == 0) 1.5 else 0),
+#                                     rnorm(8))$p.value)
+# cases[["null, but clustered data"]] <- replicate(4000, {
+#   ga <- rnorm(2); gb <- rnorm(2)
+#   t.test(rep(ga, each = 4) + rnorm(8, 0, 0.3),
+#          rep(gb, each = 4) + rnorm(8, 0, 0.3))$p.value })
+# cases[["null, conservative test"]] <-
+#   pmin(1, 2.2*replicate(4000, t.test(rnorm(8), rnorm(8))$p.value))
+# cat(sprintf("  %-28s%9s%34s\n", "analysis", "p<0.05", "shape"))
+# for (nm in names(cases)) {
+#   ps <- cases[[nm]]
+#   lo <- mean(ps < 0.2); hi <- mean(ps > 0.8)
+#   shape <- if (lo > 2.5*hi) "spike at 0 (signal, or a bug)"
+#            else if (hi > 1.5*lo) "sloping up (conservative)" else "flat (healthy)"
+#   cat(sprintf("  %-28s%9.3f%34s\n", nm, mean(ps < 0.05), shape))
+# }
+#
+# ## (a) FLAT, 5% below 0.05. The test is calibrated - the baseline you compare
+# ##     everything else against.
+# ## (b) FLAT with a SPIKE at zero. Healthy, with real signal. The height of
+# ##     the flat part estimates what fraction of features are null, which is
+# ##     exactly how Storey's q-value works (Topic 8).
+# ## (c) A spike at zero WITH NO REAL EFFECTS ANYWHERE. Indistinguishable from
+# ##     (b) by eye, which is what makes it dangerous. If you know most
+# ##     features should be null and you see this, suspect non-independence or
+# ##     an unmodelled batch before you celebrate.
+# ## (d) SLOPING UP towards 1. The test is conservative - you lose power but
+# ##     make no false claims. Common with rank tests on tiny samples.
+# ##
+# ## Plot this histogram for every genome-scale analysis you run. It costs
+# ## nothing and catches errors that staring at the top hits never will.
+```
+
+## What to take away
+
+1. A distribution is a **mechanism**, not just a shape.
+2. **Poisson** means counting noise only; **negative binomial** adds the
+   biological variability real data always has.
+3. **p-values are uniform under the null**: the cheapest diagnostic you own.
+4. $t$, $\chi^2$ and $F$ describe **computed statistics**, not measurements.
+5. Biology varies **multiplicatively**, so logs make it additive.
+
+**Next:** `F4_estimates_and_standard_errors.R`

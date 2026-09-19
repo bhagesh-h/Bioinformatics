@@ -1,0 +1,342 @@
+#' ---
+#' title: "Exercise 4 - Answer a causal question from observational data"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topics 11, 15, 32, 34
+#' **Core modules used:** 11, 22, 24, 38
+#'
+#' ## The brief
+#'
+#' A registry contains 4,000 patients. Some received drug A; the rest did not.
+#' Does drug A improve the biomarker response?
+#'
+#' You are given `severity`, `biomarker_0`, `age`, `treated`, a
+#' post-treatment `toxicity` flag, and the outcome `biomarker_1`.
+#'
+#' The temptation is to regress the outcome on everything available. Resist
+#' it. Which variables you adjust for is a **causal** decision, not a
+#' statistical one, and the data cannot make it for you. Adjusting for more
+#' variables is not safer - one of the variables above will make your answer
+#' *worse*.
+#'
+#' ## The causal structure
+#'
+#' ```
+#'        severity --------------+
+#'           |                   |
+#'           v                   v
+#'        treated ---------> biomarker_1
+#'           |                   ^
+#'           v                   |
+#'        toxicity <----- frailty (UNMEASURED)
+#'
+#'        age -> severity        (age also affects the outcome directly)
+#'        biomarker_0 -> biomarker_1,  biomarker_0 -> treated
+#' ```
+#'
+#' * `severity` and `biomarker_0` are **confounders** -> adjust.
+#' * `toxicity` is a **collider**: treatment and the unmeasured `frailty`
+#'   both cause it, and frailty also causes the outcome. Conditioning on it
+#'   opens the path `treated -> toxicity <- frailty -> biomarker_1`.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "E4_causal_question"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+TRUE_ATE <- -1.50     # the estimand: average treatment effect on biomarker_1
+
+#' ## The data
+
+#+ data
+make_registry <- function(seed = 3, n = 4000, ate = TRUE_ATE, unmeasured = 0) {
+  set.seed(seed)
+  age <- rnorm(n, 64, 11)
+  ## Frailty is NEVER returned. It always affects the outcome and the toxicity
+  ## risk; `unmeasured` additionally makes it affect TREATMENT, which is what
+  ## turns it into a confounder (Q5).
+  frailty <- rnorm(n)
+  severity <- 0.045*(age - 64) + rnorm(n) + unmeasured*frailty
+  biomarker_0 <- 10 + 1.4*severity + rnorm(n, 0, 1.2)
+  ## CONFOUNDING BY INDICATION: sicker patients are more likely to be treated.
+  lp_t <- -0.4 + 0.95*severity + 0.22*(biomarker_0 - 10) + unmeasured*frailty
+  treated <- rbinom(n, 1, plogis(lp_t))
+  biomarker_1 <- 8 + ate*treated + 1.7*severity + 0.55*(biomarker_0 - 10) +
+    0.02*(age - 64) + 1.6*frailty + rnorm(n, 0, 1.2)
+  ## COLLIDER: a common effect of treatment and frailty.
+  toxicity <- rbinom(n, 1, plogis(-1.0 + 2.0*treated + 2.2*frailty))
+  data.frame(age, severity, biomarker_0, treated, toxicity, biomarker_1)
+}
+header("The registry")
+reg <- make_registry()
+cat(sprintf("  n = %d, treated = %d (%.1f%%)\n", nrow(reg), sum(reg$treated),
+            100*mean(reg$treated)))
+cat(sprintf("\n  %-16s%12s%12s%12s\n", "variable", "untreated", "treated",
+            "std. diff"))
+for (v in c("age", "severity", "biomarker_0", "toxicity", "biomarker_1")) {
+  a <- reg[[v]][reg$treated == 0]; b <- reg[[v]][reg$treated == 1]
+  sd_p <- sqrt((var(a) + var(b))/2)
+  cat(sprintf("  %-16s%12.3f%12.3f%12.3f\n", v, mean(a), mean(b),
+              (mean(b) - mean(a))/sd_p))
+}
+cat("\n  A standardised difference above ~0.1 marks an imbalanced covariate.\n")
+cat("  The treated patients are SICKER at baseline - that is the whole\n")
+cat("  problem, and it is visible before any modelling.\n")
+
+#' ### Q1: The naive answer, and why it has the wrong sign
+
+#+ q1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# naive <- mean(reg$biomarker_1[reg$treated == 1]) -
+#          mean(reg$biomarker_1[reg$treated == 0])
+# cat(sprintf("  naive difference in means : %+.3f\n", naive))
+# cat(sprintf("  true ATE                  : %+.3f\n", TRUE_ATE))
+# cat(sprintf("  bias                      : %+.3f\n", naive - TRUE_ATE))
+# cat("\n  The naive estimate has the WRONG SIGN. A drug that genuinely lowers\n")
+# cat("  the biomarker appears to raise it, because the patients who received\n")
+# cat("  it were sicker to begin with.\n")
+#
+# ## This is confounding by indication, the default state of every
+# ## observational treatment comparison in medicine. Sample size does not help:
+# ## with n = 4,000 the naive estimate is precisely and confidently wrong.
+# ## Precision is not accuracy.
+
+#' ### Q2: Adjust for the confounders, two ways
+#'
+#' Estimate the ATE by outcome regression and by IPTW (eq. 32.4), then check
+#' covariate balance after weighting.
+
+#+ q2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# CONF <- c("severity", "biomarker_0", "age")
+# ## (a) Outcome regression: the coefficient on `treated` is the ATE provided
+# ##     the model is right and all confounders are in it.
+# m_out <- lm(biomarker_1 ~ treated + severity + biomarker_0 + age, reg)
+# ate_reg <- coef(m_out)["treated"]
+# ## (b) IPTW: model treatment, then weight by 1/P(own treatment). This builds
+# ##     a pseudo-population in which treatment is independent of the measured
+# ##     confounders.
+# ps_model <- glm(treated ~ severity + biomarker_0 + age, binomial, reg)
+# ps <- fitted(ps_model)
+# ## Stabilised weights: same estimand, much lower variance.
+# p_t <- mean(reg$treated)
+# w <- ifelse(reg$treated == 1, p_t/ps, (1 - p_t)/(1 - ps))
+# wm <- function(x, ww) sum(x*ww)/sum(ww)
+# i1 <- reg$treated == 1; i0 <- !i1
+# ate_iptw <- wm(reg$biomarker_1[i1], w[i1]) - wm(reg$biomarker_1[i0], w[i0])
+# naive <- mean(reg$biomarker_1[i1]) - mean(reg$biomarker_1[i0])
+# cat(sprintf("  %-34s%10s%10s\n", "estimator", "ATE", "bias"))
+# cat(sprintf("  %-34s%10.3f%10.3f\n", "naive difference", naive, naive - TRUE_ATE))
+# cat(sprintf("  %-34s%10.3f%10.3f\n", "outcome regression", ate_reg, ate_reg - TRUE_ATE))
+# cat(sprintf("  %-34s%10.3f%10.3f\n", "IPTW (stabilised)", ate_iptw, ate_iptw - TRUE_ATE))
+# cat(sprintf("  %-34s%10.3f%10.3f\n", "TRUTH", TRUE_ATE, 0))
+# cat(sprintf("\n  %-16s%18s%22s\n", "covariate", "std diff before",
+#             "std diff after IPTW"))
+# for (v in CONF) {
+#   a <- reg[[v]][i0]; b <- reg[[v]][i1]
+#   sd_p <- sqrt((var(a) + var(b))/2)
+#   cat(sprintf("  %-16s%18.3f%22.3f\n", v, (mean(b) - mean(a))/sd_p,
+#               (wm(b, w[i1]) - wm(a, w[i0]))/sd_p))
+# }
+# cat(sprintf("\n  weight diagnostics: max = %.2f, effective n = %.0f of %d\n",
+#             max(w), sum(w)^2/sum(w^2), nrow(reg)))
+#
+# ## Both estimators recover the truth, because between them they use the SAME
+# ## assumption: all confounders are measured and correctly modelled. They are
+# ## not independent checks of each other. What IPTW adds is the BALANCE TABLE,
+# ## which IS checkable: if the standardised differences do not collapse, your
+# ## propensity model is wrong and you know it before looking at the outcome.
+
+#' ### Q3: The collider
+#'
+#' Add `toxicity` to the outcome regression. It is measured, it is strongly
+#' associated with the outcome, and adding it "controls for more". What
+#' happens?
+
+#+ q3
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# m_coll <- lm(biomarker_1 ~ treated + severity + biomarker_0 + age + toxicity, reg)
+# ## Stratifying on the collider is the same mistake in another costume.
+# m_strat <- lm(biomarker_1 ~ treated + severity + biomarker_0 + age,
+#               subset(reg, toxicity == 0))
+# cat(sprintf("  %-46s%10s%10s\n", "model", "ATE", "bias"))
+# for (nm in list(c("correct: confounders only", coef(m_out)["treated"]),
+#                 c("+ toxicity (a COLLIDER)", coef(m_coll)["treated"]),
+#                 c("restricted to toxicity == 0", coef(m_strat)["treated"]),
+#                 c("TRUTH", TRUE_ATE)))
+#   cat(sprintf("  %-46s%10.3f%10.3f\n", nm[[1]], as.numeric(nm[[2]]),
+#               as.numeric(nm[[2]]) - TRUE_ATE))
+# cat(sprintf("\n  toxicity is strongly 'significant': p = %.2e,\n",
+#             coef(summary(m_coll))["toxicity", "Pr(>|t|)"]))
+# cat(sprintf("  and adding it RAISES R^2 from %.3f to %.3f.\n",
+#             summary(m_out)$r.squared, summary(m_coll)$r.squared))
+#
+# ## Every statistical signal says to include toxicity: it is overwhelmingly
+# ## significant, it raises R^2, it lowers the residual variance. And it makes
+# ## the answer WRONG - here it overstates the benefit by about a third.
+# ##
+# ## Toxicity is a common effect of treatment and of frailty, and frailty also
+# ## causes the outcome. Conditioning on a common effect induces an association
+# ## between its causes (eq. 32.2), so the closed path
+# ##     treated -> toxicity <- frailty -> biomarker_1
+# ## is opened and its bias lands on the treatment coefficient. Restricting to
+# ## non-toxic patients does the same damage - slightly worse, in fact - which
+# ## is why "we excluded patients who experienced toxicity" is a red flag in a
+# ## methods section.
+# ##
+# ## NOTHING IN THE DATA distinguishes a collider from a confounder. Only the
+# ## knowledge that toxicity happened AFTER treatment, and shares a cause with
+# ## the outcome, settles it. That is why you draw the DAG before you fit.
+
+#' ### Q4: Doubly robust estimation
+#'
+#' AIPW (eq. 32.6) is consistent if **either** the outcome model or the
+#' propensity model is correct. Demonstrate that by misspecifying each.
+
+#+ q4
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# estimators <- function(df, out_formula, ps_formula) {
+#   mo <- lm(out_formula, df)
+#   mu1 <- predict(mo, transform(df, treated = 1))
+#   mu0 <- predict(mo, transform(df, treated = 0))
+#   e <- pmin(pmax(fitted(glm(ps_formula, binomial, df)), 0.02), 0.98)
+#   a <- df$treated; y <- df$biomarker_1
+#   pt <- mean(a)
+#   ws <- ifelse(a == 1, pt/e, (1 - pt)/(1 - e))
+#   ate_g <- mean(mu1 - mu0)
+#   ate_ipw <- sum(y[a == 1]*ws[a == 1])/sum(ws[a == 1]) -
+#              sum(y[a == 0]*ws[a == 0])/sum(ws[a == 0])
+#   ## AIPW = g-formula estimate + a weighted residual correction.
+#   aipw <- mean(a*(y - mu1)/e - (1 - a)*(y - mu0)/(1 - e) + mu1 - mu0)
+#   c(g = ate_g, ipw = ate_ipw, aipw = aipw)
+# }
+# GOOD_OUT <- biomarker_1 ~ treated + severity + biomarker_0 + age
+# BAD_OUT  <- biomarker_1 ~ treated                       # omits confounders
+# GOOD_PS  <- treated ~ severity + biomarker_0 + age
+# BAD_PS   <- treated ~ age                               # omits real drivers
+# cat(sprintf("  %-16s%-14s%10s%10s%10s\n", "outcome model", "PS model",
+#             "g-form", "IPTW", "AIPW"))
+# for (o in list(c("correct", "GOOD_OUT"), c("WRONG", "BAD_OUT")))
+#   for (p_ in list(c("correct", "GOOD_PS"), c("WRONG", "BAD_PS"))) {
+#     r <- estimators(reg, get(o[2]), get(p_[2]))
+#     cat(sprintf("  %-16s%-14s%10.3f%10.3f%10.3f\n", o[1], p_[1],
+#                 r["g"], r["ipw"], r["aipw"]))
+#   }
+# cat(sprintf("  %-30s%10.3f%10.3f%10.3f\n", "TRUTH", TRUE_ATE, TRUE_ATE, TRUE_ATE))
+#
+# ## Read the AIPW column: it lands near the truth in the first three rows and
+# ## fails only when BOTH models are wrong. That is double robustness - two
+# ## chances to be right instead of one.
+# ##
+# ## It is not magic. AIPW does NOT protect against an unmeasured confounder,
+# ## because neither model can contain a variable you do not have. It protects
+# ## against getting the functional form wrong, not against the wrong variable
+# ## list. Q5 is about the other failure.
+
+#' ### Q5: What would it take to explain the result away?
+
+#+ q5
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# cat(sprintf("  %-14s%10s%11s%10s%10s\n", "unmeasured", "naive", "adjusted",
+#             "AIPW", "bias"))
+# for (u in c(0, 0.3, 0.6, 1.0, 1.6)) {
+#   r <- make_registry(seed = 3, unmeasured = u)
+#   nv <- mean(r$biomarker_1[r$treated == 1]) - mean(r$biomarker_1[r$treated == 0])
+#   e <- estimators(r, GOOD_OUT, GOOD_PS)
+#   cat(sprintf("  %-14.1f%10.3f%11.3f%10.3f%10.3f\n", u, nv, e["g"], e["aipw"],
+#               e["aipw"] - TRUE_ATE))
+# }
+# cat(sprintf("  %-14s%10s%11.3f%10.3f%10.3f\n", "TRUTH", "", TRUE_ATE, TRUE_ATE, 0))
+#
+# ## Every method above adjusts only for what it can see. As the unmeasured
+# ## frailty strengthens, ALL of them drift together - the doubly robust
+# ## estimator no better than the rest. No amount of methodological
+# ## sophistication substitutes for measuring the confounder.
+# ##
+# ## Since you can never rule this out, report how strong the unmeasured
+# ## confounding would have to be. For a risk ratio RR the E-value is
+# ##     E = RR + sqrt(RR*(RR - 1))                          (eq. 32.8)
+# ## the minimum association (with BOTH treatment and outcome) an unmeasured
+# ## confounder would need to explain the estimate away.
+# for (rr in c(1.2, 1.5, 2.0, 3.0))
+#   cat(sprintf("    RR = %.1f  ->  E-value = %.2f\n", rr, rr + sqrt(rr*(rr - 1))))
+# cat("\n  An E-value of 1.7 means a confounder would need ~1.7-fold\n")
+# cat("  associations with both treatment and outcome - plausible, so the\n")
+# cat("  finding is fragile. An E-value of 5 would be hard to dismiss.\n")
+
+#' ## Debrief
+
+#+ debrief
+header("The generative truth")
+cat(sprintf("  TRUE average treatment effect = %+.2f on biomarker_1.\n\n", TRUE_ATE))
+cat("  Variable roles - the only thing that matters, and the only thing the
+  data cannot tell you:
+
+    severity      CONFOUNDER  causes treatment and outcome    -> ADJUST
+    biomarker_0   CONFOUNDER  causes treatment and outcome    -> ADJUST
+    age           CONFOUNDER  via severity, plus direct       -> ADJUST
+    toxicity      COLLIDER    caused by treatment AND frailty -> DO NOT ADJUST
+    frailty       UNMEASURED  causes the outcome and toxicity -> cannot adjust
+                              (and, in Q5, treatment too -> then a confounder)
+
+  The four lessons, in order of how often they are violated:
+
+    1. The naive comparison had the WRONG SIGN. Confounding by indication is
+       the default, not the exception.
+    2. Adjusting for MORE variables is not safer. Adding the collider made a
+       correct analysis wrong, while improving every fit statistic.
+    3. Doubly robust estimation gives two chances at the functional form. It
+       gives no protection against a variable you did not measure.
+    4. Because you can never prove there is no unmeasured confounding,
+       quantify how much would be needed. That is what an E-value is for.
+
+  Which variables to adjust for is decided by the DAG - by what you know
+  about how the data were generated - and never by stepwise selection, by
+  p-values, or by which model fits best.\n")
+
+png(file.path(OUT, "causal_question.png"), width = 1200, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.4, 4.2, 2.6, 1))
+plot(reg$severity, reg$biomarker_1, pch = 16, cex = 0.25,
+     col = adjustcolor(c("steelblue", "darkorange")[reg$treated + 1], 0.35),
+     xlab = "severity (confounder)", ylab = "biomarker_1",
+     main = "Treated patients start sicker")
+legend("topleft", c("untreated", "treated"), col = c("steelblue", "darkorange"),
+       pch = 16, bty = "n", cex = 0.75)
+ps <- fitted(glm(treated ~ severity + biomarker_0 + age, binomial, reg))
+h0 <- hist(ps[reg$treated == 0], breaks = 30, plot = FALSE)
+h1 <- hist(ps[reg$treated == 1], breaks = 30, plot = FALSE)
+plot(h0, col = adjustcolor("steelblue", 0.6), border = "white", freq = FALSE,
+     xlab = "propensity score", main = "Overlap (positivity) is adequate",
+     ylim = c(0, max(h0$density, h1$density)))
+plot(h1, col = adjustcolor("darkorange", 0.6), border = "white", freq = FALSE,
+     add = TRUE)
+rr <- seq(1.01, 4, length.out = 100)
+plot(rr, rr + sqrt(rr*(rr - 1)), type = "l", lwd = 2, col = "firebrick",
+     xlab = "observed risk ratio", ylab = "E-value",
+     main = "Eq. (32.8): how much would it take?")
+invisible(dev.off())
+cat("Figure written to", file.path(OUT, "causal_question.png"), "\n")
+
+#' ## What to take away
+#'
+#' 1. Draw the DAG **before** fitting. Adjustment sets come from the DAG.
+#' 2. Confounding by indication routinely flips the sign.
+#' 3. A collider is statistically indistinguishable from a confounder.
+#' 4. Never adjust for anything measured **after** treatment.
+#' 5. Doubly robust is not robust to unmeasured confounding.
+#' 6. Report an E-value with every observational estimate.
+#'
+#' **This is the final exercise.** Return to `stats.md` for the theory, or to
+#' `statsR/bioinformatics/` to apply it.

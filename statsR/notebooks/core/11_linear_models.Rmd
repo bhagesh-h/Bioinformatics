@@ -1,0 +1,245 @@
+---
+title: "Module 11 - Linear regression as the core framework"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Topic 11, equations (11.1)-(11.13)
+
+## What you will learn
+
+1. OLS from the normal equations (11.2), the hat matrix (11.3), and why R
+   uses QR rather than inverting `X'X`.
+2. Coefficient SEs and t-tests (11.4)-(11.5).
+3. Nested-model F tests (11.6); why R^2 cannot select models (11.7).
+4. **Confidence vs prediction intervals** (11.8)-(11.9).
+5. Leverage, Cook's distance (11.10)-(11.11), VIF (11.12).
+6. Splines (11.13), and the assumption hierarchy.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(splines))
+MODULE_NAME <- "11_linear_models"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+```
+
+## 1. OLS from scratch, eq. (11.2)-(11.5)
+
+```{r ols}
+header("1. Normal equations, hat matrix, standard errors (11.2)-(11.5)")
+set.seed(1101)
+n <- 60
+dat <- data.frame(age = runif(n, 25, 75), treated = rbinom(n, 1, 0.5),
+                  batch = factor(sample(0:2, n, TRUE)))
+dat$y <- with(dat, 2 + 0.05*age + 1.4*treated + 0.6*(batch=="1") -
+                0.4*(batch=="2") + rnorm(n))
+
+ols_from_scratch <- function(X, y) {
+  ## QR, never solve(t(X) %*% X): forming the normal equations SQUARES the
+  ## condition number (eq. 16.10) and loses half your significant digits.
+  qrX <- qr(X); beta <- qr.coef(qrX, y)                      # eq. (11.2)
+  fitted <- X %*% beta; resid <- y - fitted
+  p <- ncol(X); sigma2 <- sum(resid^2) / (n - p)             # eq. (11.4)
+  XtX_inv <- chol2inv(qr.R(qrX))
+  se <- sqrt(sigma2 * diag(XtX_inv))
+  t <- beta / se                                             # eq. (11.5)
+  H <- qr.Q(qrX) %*% t(qr.Q(qrX))                            # eq. (11.3)
+  list(beta = beta, se = se, t = t, p = 2*pt(abs(t), n-p, lower.tail = FALSE),
+       H = H, leverage = diag(H), sigma2 = sigma2)
+}
+X <- model.matrix(~ age + treated + batch, data = dat)
+mine <- ols_from_scratch(X, dat$y)
+fit <- lm(y ~ age + treated + batch, data = dat)
+cat(sprintf("  %-14s%13s%11s%9s%19s\n", "term", "beta (mine)", "SE (mine)", "t",
+            "lm() beta"))
+for (i in seq_along(mine$beta))
+  cat(sprintf("  %-14s%13.5f%11.5f%9.3f%19.5f\n", names(mine$beta)[i],
+              mine$beta[i], mine$se[i], mine$t[i], coef(fit)[i]))
+cat(sprintf("\n  max |mine - lm()| = %.2e\n", max(abs(mine$beta - coef(fit)))))
+cat(sprintf("\n  Hat matrix (11.3): symmetric? %s  idempotent? %s  trace = %.6f (= p = %d)\n",
+            isTRUE(all.equal(mine$H, t(mine$H))),
+            isTRUE(all.equal(mine$H %*% mine$H, mine$H)),
+            sum(diag(mine$H)), ncol(X)))
+
+cat("\n--- Numerical stability on a nearly-collinear design ---\n")
+tt <- seq(0, 1, length.out = 40)
+Xbad <- cbind(1, tt, tt^2, tt^3, tt^4, tt^5)
+ybad <- 1 + 2*tt + rnorm(40, 0, 0.01)
+cat(sprintf("  condition number of X   : %.3e\n", kappa(Xbad, exact = TRUE)))
+cat(sprintf("  condition number of X'X : %.3e\n", kappa(crossprod(Xbad), exact = TRUE)))
+b_normal <- solve(crossprod(Xbad), crossprod(Xbad, ybad))
+b_qr <- qr.coef(qr(Xbad), ybad)
+cat(sprintf("  max |normal-equations - QR|: %.3e\n", max(abs(b_normal - b_qr))))
+cat("  lm() uses QR for exactly this reason.\n")
+```
+
+## 2. Nested-model F test and R^2, eq. (11.6)-(11.7)
+
+```{r nested-f}
+header("2. Partial F test (11.6); why R^2 cannot select models (11.7)")
+fit_red <- lm(y ~ age + treated, data = dat)
+av <- anova(fit_red, fit)
+p1 <- length(coef(fit)); p0 <- length(coef(fit_red))
+F_manual <- ((sum(residuals(fit_red)^2) - sum(residuals(fit)^2)) / (p1 - p0)) /
+  (sum(residuals(fit)^2) / (n - p1))
+cat(sprintf("  manual F (11.6) = %.4f, df=(%d, %d), p = %.4f\n",
+            F_manual, p1 - p0, n - p1, pf(F_manual, p1-p0, n-p1, lower.tail = FALSE)))
+cat(sprintf("  anova() F       = %.4f, p = %.4f\n", av[["F"]][2], av[["Pr(>F)"]][2]))
+
+cat("\n  R^2 always increases when you add ANY predictor - even pure noise:\n")
+d2 <- dat
+cat(sprintf("    %-34s%9s%10s\n", "model", "R^2", "adj R^2"))
+f0 <- lm(y ~ age, data = d2)
+cat(sprintf("    %-34s%9.4f%10.4f\n", "y ~ age", summary(f0)$r.squared,
+            summary(f0)$adj.r.squared))
+set.seed(1102)
+for (k in 1:5) {
+  d2[[paste0("noise", k)]] <- rnorm(n)
+  form <- as.formula(paste("y ~ age +", paste0("noise", 1:k, collapse = " + ")))
+  f_ <- lm(form, data = d2)
+  cat(sprintf("    %-34s%9.4f%10.4f\n", sprintf("+ %d pure-noise predictors", k),
+              summary(f_)$r.squared, summary(f_)$adj.r.squared))
+}
+cat("  Adjusted R^2 penalises p, but neither is a validation metric (Module 21).\n")
+```
+
+## 3. Confidence vs prediction intervals, eq. (11.8)-(11.9)
+
+```{r intervals}
+header("3. CI for the mean vs PI for an observation (11.8)-(11.9)")
+fit_s <- lm(y ~ age, data = dat)
+nd <- data.frame(age = 50)
+ci <- predict(fit_s, nd, interval = "confidence")
+pi_ <- predict(fit_s, nd, interval = "prediction")
+cat(sprintf("  at age = 50: fitted = %.4f\n", ci[1]))
+cat(sprintf("    95%% CI for the MEAN  [%.4f, %.4f]  width %.4f\n",
+            ci[2], ci[3], ci[3] - ci[2]))
+cat(sprintf("    95%% PI for an OBS    [%.4f, %.4f]  width %.4f\n",
+            pi_[2], pi_[3], pi_[3] - pi_[2]))
+cat("\n  As n grows the CI shrinks to zero but the PI converges to ~ +/-1.96 sigma:\n")
+set.seed(1103)
+for (nn in c(30, 300, 3000, 30000)) {
+  a <- runif(nn, 25, 75); yy <- 2 + 0.05*a + rnorm(nn)
+  f_ <- lm(yy ~ a)
+  c_ <- predict(f_, data.frame(a = 50), interval = "confidence")
+  p_ <- predict(f_, data.frame(a = 50), interval = "prediction")
+  cat(sprintf("    n=%6d: CI width %.4f   PI width %.4f\n", nn,
+              c_[3]-c_[2], p_[3]-p_[2]))
+}
+cat("  The extra 1 in eq. (11.9) is irreducible noise. The PI does NOT shrink.\n")
+```
+
+## 4. Leverage, influence, collinearity, eq. (11.10)-(11.12)
+
+```{r diagnostics}
+header("4. Diagnostics: leverage, Cook's D, VIF (11.10)-(11.12)")
+lev <- hatvalues(fit); ck <- cooks.distance(fit); p_ <- length(coef(fit))
+cat(sprintf("  leverage rule of thumb 2p/n = %.4f: %d points flagged\n",
+            2*p_/n, sum(lev > 2*p_/n)))
+cat(sprintf("  Cook's D rule of thumb 4/n  = %.4f: %d points flagged\n",
+            4/n, sum(ck > 4/n)))
+cat(sprintf("  from-scratch leverage matches hatvalues(): %s\n",
+            isTRUE(all.equal(unname(sort(lev)), sort(mine$leverage)))))
+sr <- rstandard(fit)
+cat("\n  High leverage != influential. Both are needed:\n")
+cat(sprintf("    %-8s%10s%13s%10s\n", "point", "leverage", "|std resid|", "Cook D"))
+for (i in order(-ck)[1:4])
+  cat(sprintf("    %-8d%10.4f%13.4f%10.4f\n", i, lev[i], abs(sr[i]), ck[i]))
+
+vif_manual <- function(X, j) {
+  others <- X[, -j, drop = FALSE]
+  1 / (1 - summary(lm(X[, j] ~ others - 1))$r.squared)          # eq. (11.12)
+}
+set.seed(1104)
+z1 <- rnorm(n); z2 <- 0.97*z1 + rnorm(n, 0, 0.24)
+Xv <- cbind(1, age = dat$age, z1 = z1, z2 = z2)
+cat("\n  VIF (11.12) for a design with an induced collinearity:\n")
+for (j in 2:4) {
+  v <- vif_manual(Xv, j)
+  cat(sprintf("    %-6s VIF = %7.2f  -> SE inflated %.2fx%s\n",
+              colnames(Xv)[j], v, sqrt(v), if (v > 10) "   <-- serious" else ""))
+}
+```
+
+## 5. Nonlinearity via splines, eq. (11.13)
+
+```{r splines}
+header("5. Splines: linear in the PARAMETERS (11.13)")
+set.seed(1105)
+tt <- sort(runif(120, 0, 24))
+grp <- rep(0:1, 60)
+expr <- 3 + 2*sin(tt/24*2*pi) + 0.06*tt + 0.8*grp*sin(tt/24*2*pi) + rnorm(120, 0, 0.35)
+dt <- data.frame(expr = expr, t = tt, grp = factor(grp))
+m_lin <- lm(expr ~ t, data = dt)
+m_spl <- lm(expr ~ ns(t, df = 5), data = dt)
+m_int <- lm(expr ~ ns(t, df = 5) * grp, data = dt)
+cat(sprintf("  %-34s%5s%10s%10s\n", "model", "df", "RSS", "adj R^2"))
+for (z in list(list("expr ~ t (linear)", m_lin), list("expr ~ ns(t, df=5)", m_spl),
+               list("expr ~ ns(t, df=5) * group", m_int)))
+  cat(sprintf("  %-34s%5d%10.3f%10.4f\n", z[[1]], z[[2]]$rank - 1,
+              sum(residuals(z[[2]])^2), summary(z[[2]])$adj.r.squared))
+av2 <- anova(m_spl, m_int)
+cat(sprintf("\n  Treatment x time interaction test (11.6): F = %.3f, p = %.3e\n",
+            av2[["F"]][2], av2[["Pr(>F)"]][2]))
+cat("  This is how to ask 'do the groups follow different smooth trajectories?'\n")
+cat("  NOTE ns() (natural splines) constrains the fit to be LINEAR beyond the\n")
+cat("  boundary knots, which tames the wild tails of unrestricted polynomials.\n")
+```
+
+## 6. Which assumptions actually matter
+
+```{r assumptions}
+header("6. Ranking the assumption violations by damage done")
+fpr_under <- function(violation, n_sim = 2000, n = 30) {
+  mean(replicate(n_sim, {
+    if (violation == "none") { x <- rnorm(n); y <- rnorm(n) }
+    else if (violation == "non-normal residuals") { x <- rnorm(n); y <- rt(n, 3)*0.7 }
+    else if (violation == "heteroscedasticity") {
+      x <- rnorm(n); y <- rnorm(n, 0, 0.2 + 1.5*abs(x)) }
+    else {   # dependence: 6 clusters of 5
+      cl <- rep(rnorm(6, 0, 1.2), each = 5)
+      x <- rep(rnorm(6), each = 5) + rnorm(n, 0, 0.3)
+      y <- cl + rnorm(n, 0, 0.5) }
+    coef(summary(lm(y ~ x)))["x", "Pr(>|t|)"] < 0.05
+  }))
+}
+set.seed(1106)
+cat(sprintf("  %-28s%21s  (nominal 5%%)\n", "violation", "false-positive rate"))
+for (v in c("none", "non-normal residuals", "heteroscedasticity", "dependence (clusters)"))
+  cat(sprintf("  %-28s%20.1f%%\n", v, 100 * fpr_under(v)))
+cat("\n  Non-normal residuals: barely matters at n=30 (the CLT, eq. 4.5).\n")
+cat("  Heteroscedasticity : distorts SEs - fix with HC3 (Module 05).\n")
+cat("  DEPENDENCE         : catastrophic, and INVISIBLE in residual plots.\n")
+cat("  Fix dependence by design or with a mixed model (Module 14).\n")
+```
+
+## 7. Figure
+
+```{r figure}
+png(file.path(OUT, "linear_models.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+plot(fit, which = 1, caption = "", main = "Residuals vs fitted (linearity)")
+plot(fit, which = 2, caption = "", main = "Normal Q-Q (least important)")
+plot(fit, which = 5, caption = "", main = "Eq. (11.10)-(11.11): leverage")
+grid_t <- data.frame(t = seq(min(dt$t), max(dt$t), length.out = 200))
+plot(dt$t, dt$expr, col = c("steelblue", "darkorange")[dt$grp], pch = 16, cex = 0.6,
+     xlab = "time (h)", ylab = "expression",
+     main = "Eq. (11.13): spline x group interaction")
+for (g in 0:1) {
+  gg <- grid_t; gg$grp <- factor(g, levels = c("0", "1"))
+  lines(gg$t, predict(m_int, gg), col = c("steelblue", "darkorange")[g+1], lwd = 2)
+}
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "linear_models.png"), "\n")
+```
+
+## Decision rules (from `stats.md` Topic 11)
+
+1. Write the design matrix and check its rank first.
+2. Choose covariates from a causal diagram (Module 22), NOT stepwise
+   selection, which invalidates all subsequent p-values.
+3. Centre continuous predictors involved in interactions.
+4. Prefer robust SEs over dropping data when variance is non-constant.
+
+**Next:** `12_anova_and_contrasts.R`

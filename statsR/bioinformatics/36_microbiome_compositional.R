@@ -1,0 +1,381 @@
+#' ---
+#' title: "Applied 36 - Microbiome and compositional data"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 26, equations (26.1)-(26.6)
+#'
+#' ## Why this module is different
+#'
+#' We simulate ABSOLUTE abundances and then close them, so we can answer the
+#' question real data cannot: **which findings are biology and which are
+#' arithmetic?**
+
+#+ setup, message = FALSE
+MODULE_NAME <- "36_microbiome_compositional"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. Simulate ABSOLUTE abundances, then close them, eq. (26.1)
+
+#+ simulate
+header("1. Absolute truth -> relative observation (26.1)")
+simulate_microbiome <- function(n = 120, D = 180, n_changed = 45, log_effect = 1.9,
+                                depth_lo = 5000, depth_hi = 60000) {
+  group <- factor(rep(c("ctrl","case"), c(n %/% 2, n - n %/% 2)), levels = c("ctrl","case"))
+  base <- exp(rnorm(D, 5.5, 2.2))
+  true_log_fc <- numeric(D)
+  changed <- sample(D, n_changed)
+  ## Deliberately ASYMMETRIC: most changed taxa INCREASE, so the total shifts.
+  true_log_fc[changed] <- abs(rnorm(n_changed, 0, log_effect))
+  A <- t(sapply(seq_len(n), function(i) {
+    eff <- if (group[i] == "case") true_log_fc else 0
+    base * exp(eff + rnorm(D, 0, 0.55))
+  }))
+  A[matrix(runif(n*D), n) < 0.25] <- 0            # structural zeros
+  depth <- sample(depth_lo:depth_hi, n, TRUE)
+  Y <- t(sapply(seq_len(n), function(i) rmultinom(1, depth[i], A[i, ]/sum(A[i, ]))))
+  dimnames(Y) <- list(sprintf("S%03d", seq_len(n)), sprintf("Taxon%03d", seq_len(D)))
+  dimnames(A) <- dimnames(Y)
+  list(counts = Y, absolute = A,
+       meta = data.frame(group = group, depth = depth, row.names = rownames(Y)),
+       truth = data.frame(log_fc = true_log_fc, changed = true_log_fc != 0,
+                          row.names = colnames(Y)))
+}
+set.seed(3601)
+sim <- simulate_microbiome()
+counts <- sim$counts; absolute <- sim$absolute; meta <- sim$meta; truth <- sim$truth
+D <- ncol(counts)
+cat(sprintf("  %d samples x %d taxa\n", nrow(counts), D))
+cat(sprintf("  sequencing depth: %s - %s (%.1fx range)\n",
+            format(min(meta$depth), big.mark=","), format(max(meta$depth), big.mark=","),
+            max(meta$depth)/min(meta$depth)))
+cat(sprintf("  zeros: %.1f%% of the table\n", 100*mean(counts == 0)))
+cat(sprintf("  taxa with a TRUE absolute increase: %d\n", sum(truth$changed)))
+tc <- mean(rowSums(absolute)[meta$group == "ctrl"])
+ts <- mean(rowSums(absolute)[meta$group == "case"])
+cat(sprintf("\n  TRUE total absolute load: ctrl %s, case %s  (%.2fx)\n",
+            format(round(tc), big.mark=","), format(round(ts), big.mark=","), ts/tc))
+cat("  The total went UP. Sequencing cannot see that - it only ever returns a\n")
+cat("  FIXED number of reads. Everything below follows from that fact.\n")
+
+#' ## 2. What closure does to the truth, eq. (2.7)
+
+#+ closure
+header("2. Relative abundance of UNCHANGED taxa must fall (2.7)")
+rel <- counts/rowSums(counts)
+cat(sprintf("  %-26s%16s%16s%12s\n", "taxa", "mean rel. ctrl", "mean rel. case",
+            "log2 ratio"))
+for (row_ in list(list("TRULY increased", truth$changed),
+                  list("TRULY unchanged", !truth$changed))) {
+  rc <- mean(rel[meta$group == "ctrl", row_[[2]]])
+  rs <- mean(rel[meta$group == "case", row_[[2]]])
+  cat(sprintf("  %-26s%16.5f%16.5f%12.3f\n", row_[[1]], rc, rs, log2(rs/rc)))
+}
+cat("\n  The UNCHANGED taxa APPEAR to decrease in relative terms, because a\n")
+cat("  fixed number of reads is shared with taxa that genuinely grew. This is\n")
+cat("  arithmetic, not ecology (eq. 2.7).\n")
+
+#' ## 3. Log-ratio transformations, eq. (26.2)-(26.3)
+
+#+ logratio
+header("3. clr / alr transforms and the zero problem (26.2)-(26.3)")
+clr <- function(X, pseudocount = 0.5) {                          # eq. (26.2)
+  Xp <- X + pseudocount; Xp <- Xp/rowSums(Xp)
+  lg <- log(Xp); lg - rowMeans(lg)
+}
+Z <- clr(counts)
+cat(sprintf("  clr rows sum to zero: max |row sum| = %.2e\n", max(abs(rowSums(Z)))))
+cat(sprintf("  -> the clr covariance matrix is SINGULAR (rank %d of %d), which is\n",
+            D - 1, D))
+cat("     why you cannot invert it directly for a graphical model (10.6).\n")
+tx <- rownames(truth)[truth$changed][1]
+cat(sprintf("\n  Pseudocount sensitivity - the same taxon's clr effect:\n"))
+cat(sprintf("  %14s%26s%12s\n", "pseudocount", "clr effect (case-ctrl)", "p-value"))
+for (pc in c(0.1, 0.5, 1, 5)) {
+  Zp <- clr(counts, pc)
+  a <- Zp[meta$group == "ctrl", tx]; b <- Zp[meta$group == "case", tx]
+  cat(sprintf("  %14.1f%26.4f%12.2e\n", pc, mean(b) - mean(a), t.test(a, b)$p.value))
+}
+cat("\n  Report the pseudocount and show conclusions survive changing it.\n")
+cat("  Distinguish SAMPLING zeros (present but unseen at this depth - a\n")
+cat("  pseudocount is reasonable) from STRUCTURAL zeros (genuinely absent -\n")
+cat("  these should be MODELLED, not filled).\n")
+
+#' ## 4. Differential abundance: four strategies vs the known truth
+
+#+ da
+header("4. Differential abundance against a KNOWN absolute truth")
+da_relative_ttest <- function(counts, meta) {
+  rel <- counts/rowSums(counts)
+  apply(rel, 2, function(v) tryCatch(t.test(v ~ meta$group)$p.value, error = function(e) 1))
+}
+da_clr_ttest <- function(counts, meta, pc = 0.5) {
+  Z <- clr(counts, pc)
+  apply(Z, 2, function(v) tryCatch(t.test(v ~ meta$group)$p.value, error = function(e) 1))
+}
+da_ancombc_like <- function(counts, meta, pc = 0.5) {
+  ## ANCOM-BC-style bias correction, eq. (26.4):
+  ##     E[log Y_dj] = log A_dj + log d_j
+  ## The sample-specific sampling fraction log d_j is a location shift COMMON
+  ## to every taxon within a sample. Estimate it robustly (the median log
+  ## abundance), subtract, then test taxon-wise linear models.
+  logY <- log(counts + pc)
+  corrected <- logY - apply(logY, 1, median)
+  g <- as.numeric(meta$group == "case")
+  X <- cbind(1, g)
+  beta <- qr.coef(qr(X), corrected)
+  resid <- corrected - X %*% beta
+  dof <- nrow(X) - 2
+  se <- sqrt(colSums(resid^2)/dof * chol2inv(qr.R(qr(X)))[2, 2])
+  2*pt(abs(beta[2, ]/pmax(se, 1e-12)), dof, lower.tail = FALSE)
+}
+score <- function(p, label) {
+  q <- p.adjust(p, "BH"); rej <- q < 0.05
+  tp <- sum(rej & truth$changed); fp <- sum(rej & !truth$changed)
+  cat(sprintf("  %-40s%7d%6d%6d%9.2f%8.3f\n", label, sum(rej), tp, fp,
+              tp/sum(truth$changed), fp/max(sum(rej), 1)))
+}
+cat(sprintf("  Truth = an ABSOLUTE increase in %d taxa.\n", sum(truth$changed)))
+cat(sprintf("  %-40s%7s%6s%6s%9s%8s\n", "method", "rej", "TP", "FP", "sens", "FDP"))
+score(da_relative_ttest(counts, meta), "t-test on relative abundance")
+score(da_clr_ttest(counts, meta), "clr + t-test (26.2)")
+score(da_ancombc_like(counts, meta), "ANCOM-BC-style bias correction (26.4)")
+cat("\n  The naive relative test produces a large number of false positives -\n")
+cat("  the UNCHANGED taxa whose SHARE fell because the changed ones grew.\n")
+cat("  Estimating and removing the sample-specific sampling fraction (26.4) is\n")
+cat("  what ANCOM-BC2 does, and it is why it controls FDR where naive\n")
+cat("  relative-abundance tests do not.\n")
+
+#' ## 5. Alpha diversity is depth-dependent, eq. (26.5)
+
+#+ diversity
+header("5. Alpha diversity and rarefaction (26.5)")
+shannon <- function(x) { p <- x[x > 0]/sum(x); -sum(p*log(p)) }
+chao1 <- function(x) {
+  s <- sum(x > 0); f1 <- sum(x == 1); f2 <- sum(x == 2)
+  if (f2 > 0) s + f1^2/(2*f2) else s + f1*(f1-1)/2
+}
+div <- data.frame(observed = rowSums(counts > 0),
+                  shannon = apply(counts, 1, shannon),
+                  chao1 = apply(counts, 1, chao1),
+                  depth = meta$depth, group = meta$group)
+cat("  Correlation of each index with sequencing DEPTH (a pure artefact):\n")
+for (c_ in c("observed","shannon","chao1"))
+  cat(sprintf("    %-10s Spearman = %+.3f\n", c_,
+              cor(div$depth, div[[c_]], method = "spearman")))
+set.seed(5)
+min_depth <- min(meta$depth)
+rare <- t(sapply(seq_len(nrow(counts)), function(i)
+  rmultinom(1, min_depth, counts[i, ]/sum(counts[i, ]))))
+cat(sprintf("\n  After rarefying to %s reads:\n", format(min_depth, big.mark=",")))
+cat(sprintf("    observed   Spearman with depth = %+.3f\n",
+            cor(meta$depth, rowSums(rare > 0), method = "spearman")))
+cat(sprintf("    shannon    Spearman with depth = %+.3f\n",
+            cor(meta$depth, apply(rare, 1, shannon), method = "spearman")))
+cat("\n  Diversity estimation is one of the FEW places rarefying is defensible -\n")
+cat("  richness is intrinsically depth-dependent. For DIFFERENTIAL ABUNDANCE,\n")
+cat("  rarefying throws away data and power; use an offset or a bias-corrected\n")
+cat("  model instead.\n")
+for (c_ in c("observed","shannon")) {
+  v <- if (c_ == "observed") rowSums(rare > 0) else apply(rare, 1, shannon)
+  cat(sprintf("    %-10s ctrl %8.3f  case %8.3f  p = %.4f\n", c_,
+              mean(v[meta$group == "ctrl"]), mean(v[meta$group == "case"]),
+              t.test(v ~ meta$group)$p.value))
+}
+
+#' ## 6. Beta diversity: PERMANOVA and the dispersion trap, eq. (26.6)
+
+#+ permanova
+header("6. PERMANOVA must be paired with a DISPERSION test (26.6)")
+aitchison_distance <- function(counts, pc = 0.5) dist(clr(counts, pc))   # eq. (18.5)
+bray_curtis_matrix <- function(counts) {
+  R <- counts/rowSums(counts); n <- nrow(R)
+  D <- matrix(0, n, n)
+  for (i in seq_len(n)) D[i, ] <- rowSums(abs(sweep(R, 2, R[i, ])))/rowSums(sweep(R, 2, R[i, ], "+"))
+  as.dist(D)
+}
+permanova <- function(D, group, n_perm = 299) {
+  D2 <- as.matrix(D)^2; n <- nrow(D2); g <- as.character(group)
+  pf <- function(lab) {
+    total <- sum(D2)/(2*n); within <- 0
+    for (lv in unique(lab)) { m <- lab == lv; within <- within + sum(D2[m, m])/(2*sum(m)) }
+    a <- length(unique(lab))
+    ((total - within)/(a - 1))/(within/(n - a))
+  }
+  f <- pf(g)
+  null <- replicate(n_perm, pf(sample(g)))
+  c(F = f, p = (1 + sum(null >= f))/(n_perm + 1))
+}
+permdisp <- function(D, group, n_perm = 299) {
+  Dm <- as.matrix(D); g <- as.character(group)
+  disp <- numeric(length(g))
+  for (lv in unique(g)) {
+    m <- which(g == lv)
+    medoid <- m[which.min(rowSums(Dm[m, m, drop = FALSE]))]
+    disp[m] <- Dm[m, medoid]
+  }
+  lv <- unique(g)
+  obs <- abs(mean(disp[g == lv[1]]) - mean(disp[g == lv[2]]))
+  null <- replicate(n_perm, {
+    pg <- sample(g); abs(mean(disp[pg == lv[1]]) - mean(disp[pg == lv[2]]))
+  })
+  c(diff = obs, p = (1 + sum(null >= obs))/(n_perm + 1))
+}
+set.seed(3602)
+for (row_ in list(list("Aitchison (18.5)", aitchison_distance(counts)),
+                  list("Bray-Curtis (18.4)", bray_curtis_matrix(counts)))) {
+  pv <- permanova(row_[[2]], meta$group); dv <- permdisp(row_[[2]], meta$group)
+  cat(sprintf("  %-22s PERMANOVA F = %6.3f, p = %.4f   |   dispersion diff = %.4f, p = %.4f\n",
+              row_[[1]], pv["F"], pv["p"], dv["diff"], dv["p"]))
+}
+cat("\n  TRAP DEMO - groups with IDENTICAL centroids but different spread.\n")
+cat("  How often does PERMANOVA wrongly declare a location difference?\n\n")
+cat(sprintf("  %-34s%10s%27s\n", "design", "sd ratio", "PERMANOVA rejection rate"))
+for (cfg in list(c(60, 60, 1), c(100, 20, 2), c(20, 100, 3))) {
+  na_ <- cfg[1]; nb_ <- cfg[2]
+  lab <- c("balanced (60 vs 60)", "unbalanced, SMALL grp dispersed",
+           "unbalanced, LARGE grp dispersed")[cfg[3]]
+  for (sdr in c(2, 3)) {
+    rate <- mean(replicate(25, {
+      Zt <- rbind(matrix(rnorm(na_*20, 0, 1), na_), matrix(rnorm(nb_*20, 0, sdr), nb_))
+      permanova(dist(Zt), rep(c("a","b"), c(na_, nb_)), n_perm = 149)["p"] < 0.05
+    }))
+    cat(sprintf("  %-34s%10.1f%26.0f%%\n", lab, sdr, 100*rate))
+  }
+}
+cat("\n  The result is sharper than the usual warning. PERMANOVA is fairly\n")
+cat("  ROBUST to dispersion differences when the design is BALANCED. It breaks\n")
+cat("  down badly when the groups are UNBALANCED and the SMALLER group is the\n")
+cat("  more dispersed one - then it rejects almost always, with identical\n")
+cat("  centroids. (Anderson & Walsh 2013 document exactly this asymmetry.)\n")
+cat("\n  Two practical consequences:\n")
+cat("   * Balance your group sizes - yet another payoff from design.\n")
+cat("   * Always report PERMDISP alongside PERMANOVA, and say which of\n")
+cat("     'different centroids' and 'different spread' your data support.\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "microbiome.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+ma_c <- colMeans(absolute[meta$group == "ctrl", ]); ma_s <- colMeans(absolute[meta$group == "case", ])
+mr_c <- colMeans(rel[meta$group == "ctrl", ]); mr_s <- colMeans(rel[meta$group == "case", ])
+ok <- ma_c > 0 & mr_c > 0
+plot(log2(ma_s[ok]/ma_c[ok]), log2(mr_s[ok]/mr_c[ok]), pch = 16, cex = 0.5,
+     col = ifelse(truth$changed[ok], "firebrick", adjustcolor("grey50", 0.5)),
+     xlab = "TRUE log2 FC (absolute)", ylab = "observed log2 FC (relative)",
+     main = "Eq. (2.7): closure shifts everything down")
+abline(h = 0); abline(v = 0); abline(0, 1, lty = 2)
+plot(div$depth, div$observed, pch = 16, cex = 0.6, col = "steelblue",
+     xlab = "sequencing depth", ylab = "observed taxa",
+     main = "Eq. (26.5): richness tracks depth")
+points(div$depth, rowSums(rare > 0), pch = 16, cex = 0.6, col = "darkorange")
+legend("bottomright", c("raw","rarefied"), col = c("steelblue","darkorange"),
+       pch = 16, bty = "n", cex = 0.7)
+pco <- cmdscale(aitchison_distance(counts), k = 2)
+plot(pco, pch = 16, cex = 0.7, col = c("steelblue","darkorange")[meta$group],
+     xlab = "PCoA 1", ylab = "PCoA 2", main = "Aitchison PCoA (eq. 18.5)")
+legend("topright", levels(meta$group), col = c("steelblue","darkorange"),
+       pch = 16, bty = "n", cex = 0.7)
+set.seed(6)
+Zc <- rbind(matrix(rnorm(100*20, 0, 1), 100), matrix(rnorm(20*20, 0, 3), 20))
+plot(Zc[, 1], Zc[, 2], pch = 16, cex = 0.6,
+     col = c(rep("steelblue", 100), rep("darkorange", 20)),
+     main = "Trap: same centroid, unbalanced dispersion", xlab = "", ylab = "")
+legend("topright", c("large n, tight","small n, dispersed"),
+       col = c("steelblue","darkorange"), pch = 16, bty = "n", cex = 0.65)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "microbiome.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: Spurious correlation from closure
+#'
+#' Correlate taxa whose ABSOLUTE abundances are independent, on the relative and
+#' clr scales. Which is honest?
+
+#+ problem1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sub <- colnames(counts)[1:40]
+# Cabs <- cor(absolute[, sub]); Crel <- cor(rel[, sub]); Cclr <- cor(clr(counts)[, sub])
+# off <- upper.tri(Cabs)
+# for (row_ in list(list("ABSOLUTE (the truth)", Cabs), list("relative (closed)", Crel),
+#                   list("clr", Cclr)))
+#   cat(sprintf("  %-24s mean off-diag r = %+.4f, max |r| = %.3f\n", row_[[1]],
+#               mean(row_[[2]][off]), max(abs(row_[[2]][off]))))
+#
+# ## Closure forces the AVERAGE correlation negative (eq. 2.7). The clr partially
+# ## removes it but is NOT a complete fix: clr rows also sum to zero, so clr
+# ## values carry a residual negative constraint. For network inference use
+# ## proportionality (phi, rho_p) or SPIEC-EASI, which estimate a sparse
+# ## PRECISION matrix (eq. 10.6) on log-ratios rather than raw correlations.
+
+#' ### Problem 2: Absolute quantification rescues the analysis
+#'
+#' Suppose you also measured total bacterial load by qPCR. Multiply relative
+#' abundances by the (known) total and redo the test. How much does it improve?
+
+#+ problem2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# total_load <- rowSums(absolute)                    # the "qPCR" measurement
+# abs_est <- rel * total_load
+# logA <- log(abs_est + 1)
+# g <- as.numeric(meta$group == "case"); X <- cbind(1, g)
+# beta <- qr.coef(qr(X), logA); resid <- logA - X %*% beta
+# se <- sqrt(colSums(resid^2)/(nrow(X)-2) * chol2inv(qr.R(qr(X)))[2,2])
+# p_abs <- 2*pt(abs(beta[2, ]/pmax(se, 1e-12)), nrow(X)-2, lower.tail = FALSE)
+# cat(sprintf("  %-40s%7s%6s%6s%9s%8s\n", "method","rej","TP","FP","sens","FDP"))
+# score(da_ancombc_like(counts, meta), "bias-corrected relative (26.4)")
+# score(p_abs, "ABSOLUTE abundance (rel x qPCR total)")
+#
+# ## With an absolute anchor the question becomes answerable DIRECTLY and both
+# ## sensitivity and FDP improve. This is why spike-ins and qPCR total-load
+# ## measurements are worth the effort: they convert an unidentifiable question
+# ## into an identifiable one. Without them, state that your claim is about
+# ## RELATIVE abundance.
+
+#' ### Problem 3: Prevalence filtering
+#'
+#' Filter taxa present in at least 10%, 25% and 50% of samples. Why must the
+#' filter be outcome-independent?
+
+#+ problem3
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# cat(sprintf("  %19s%12s%7s%6s%6s%9s%8s\n", "prevalence filter","taxa kept",
+#             "rej","TP","FP","sens","FDP"))
+# for (thr in c(0, 0.10, 0.25, 0.50)) {
+#   keep <- colMeans(counts > 0) >= thr
+#   p <- da_ancombc_like(counts[, keep, drop = FALSE], meta)
+#   q <- p.adjust(p, "BH"); rej <- q < 0.05
+#   t0 <- truth[names(p), ]
+#   cat(sprintf("  %18.0f%%%12d%7d%6d%6d%9.2f%8.3f\n", 100*thr, sum(keep), sum(rej),
+#               sum(rej & t0$changed), sum(rej & !t0$changed),
+#               sum(rej & t0$changed)/sum(truth$changed),
+#               sum(rej & !t0$changed)/max(sum(rej), 1)))
+# }
+#
+# ## Prevalence is computed from the COUNTS alone, with no reference to the
+# ## group labels, so it is OUTCOME-INDEPENDENT and cannot break FDR control
+# ## (Module 08, section 6). Filtering on "taxa that differ between groups"
+# ## would. Note the trade-off: aggressive filtering removes rare taxa that may
+# ## be exactly the interesting ones. Pre-specify the rule.
+
+#' ## What to take away
+#'
+#' 1. State whether your claim is about RELATIVE or ABSOLUTE abundance.
+#' 2. Transform with log-ratios before distance, ordination, correlation or PCA.
+#' 3. Handle zeros explicitly; report the pseudocount and a sensitivity analysis.
+#' 4. Use bias-corrected differential abundance (26.4).
+#' 5. **Pair every PERMANOVA with a dispersion test.**
+#' 6. Rarefy only for diversity, never for differential abundance.
+#'
+#' **Next:** `37_spatial_omics.R`

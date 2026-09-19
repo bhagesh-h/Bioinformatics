@@ -1,0 +1,254 @@
+#' ---
+#' title: "Module 08 - Multiple testing and selective inference"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 8, equations (8.1)-(8.11)
+#'
+#' ## What you will learn
+#'
+#' 1. FWER (8.1) vs FDR (8.2): different guarantees, different uses.
+#' 2. Bonferroni/Holm/BH/BY implemented from their definitions and checked
+#'    against `p.adjust()`.
+#' 3. That **Holm dominates Bonferroni** -- there is never a reason for plain
+#'    Bonferroni.
+#' 4. Storey's pi0 and q-values (8.9)-(8.10).
+#' 5. Local FDR (8.11): the gene AT the threshold is much less certain.
+#' 6. Independent vs outcome-dependent filtering.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "08_multiple_testing"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. A realistic screen with a KNOWN truth
+
+#+ screen
+header("1. Simulating a differential-expression screen with known truth")
+simulate_screen <- function(G = 10000, pi0 = 0.85, effect = 1.1, n = 6, seed = 0) {
+  set.seed(seed)
+  is_alt <- runif(G) >= pi0
+  ## Mean expression governs POWER but is independent of the p-value under the
+  ## null - the requirement for valid independent filtering (section 6).
+  base_mean <- exp(rnorm(G, 2, 1.6))
+  noise_sd <- 1 / sqrt(1 + base_mean / 10)
+  delta <- ifelse(is_alt, effect * sample(c(-1, 1), G, TRUE), 0)
+  a <- matrix(rnorm(G * n, delta, noise_sd), nrow = G)
+  b <- matrix(rnorm(G * n, 0, noise_sd), nrow = G)
+  tt <- vapply(seq_len(G), function(i) {
+    r <- t.test(a[i, ], b[i, ]); c(r$p.value, mean(a[i, ]) - mean(b[i, ]))
+  }, numeric(2))
+  data.frame(p = tt[1, ], estimate = tt[2, ], base_mean = base_mean, is_alt = is_alt)
+}
+screen <- simulate_screen(seed = 801)
+G <- nrow(screen)
+cat(sprintf("  G = %d features, true pi0 = %.3f\n", G, 1 - mean(screen$is_alt)))
+cat(sprintf("  unadjusted p < 0.05: %d features\n", sum(screen$p < 0.05)))
+cat(sprintf("    of which truly null: %d\n", sum(screen$p < 0.05 & !screen$is_alt)))
+cat("  Testing 10,000 nulls at alpha=0.05 gives ~500 false positives by design.\n")
+
+#' ## 2. The procedures, from their definitions
+
+#+ procedures
+header("2. Bonferroni (8.3), Holm (8.4), BH (8.5)-(8.7), BY (8.8)")
+bonferroni_adjust <- function(p) pmin(1, length(p) * p)          # eq. (8.3)
+holm_adjust <- function(p) {                                     # eq. (8.4)
+  G <- length(p); o <- order(p); adj <- numeric(G); running <- 0
+  for (rank in seq_len(G)) {
+    running <- max(running, (G - rank + 1) * p[o[rank]])
+    adj[o[rank]] <- min(1, running)
+  }
+  adj
+}
+bh_adjust <- function(p) {                                       # eq. (8.7)
+  G <- length(p); o <- order(p); ps <- p[o]
+  raw <- ps * G / seq_len(G)
+  adj_sorted <- rev(cummin(rev(raw)))            # min over m >= j
+  adj <- numeric(G); adj[o] <- pmin(adj_sorted, 1); adj
+}
+by_adjust <- function(p) pmin(1, bh_adjust(p) * sum(1 / seq_along(p)))  # eq. (8.8)
+
+p <- screen$p
+mine <- list(bonferroni = bonferroni_adjust(p), holm = holm_adjust(p),
+             BH = bh_adjust(p), BY = by_adjust(p))
+theirs <- list(bonferroni = p.adjust(p, "bonferroni"), holm = p.adjust(p, "holm"),
+               BH = p.adjust(p, "BH"), BY = p.adjust(p, "BY"))
+cat(sprintf("  %-12s%26s\n", "method", "max |mine - p.adjust()|"))
+for (k in names(mine)) cat(sprintf("  %-12s%26.2e\n", k, max(abs(mine[[k]] - theirs[[k]]))))
+cat("  (all ~1e-16: the from-scratch implementations are exact)\n")
+H_G <- sum(1 / seq_len(G))
+cat(sprintf("\n  Harmonic number H_G for G=%d: %.3f  (~ ln G + 0.5772 = %.3f)\n",
+            G, H_G, log(G) + 0.5772))
+cat(sprintf("  BY therefore pays a ~%.1f-fold penalty over BH.\n", H_G))
+
+#' ## 3. Realised error rates
+
+#+ error-rates
+header("3. Realised FWER and FDR (8.1)-(8.2), and the power cost")
+evaluate <- function(reject, is_alt) {
+  V <- sum(reject & !is_alt); S <- sum(reject & is_alt); R <- V + S
+  c(rejected = R, true_pos = S, false_pos = V,
+    FDP = V / max(R, 1), sensitivity = S / max(sum(is_alt), 1))
+}
+tab <- rbind(none = evaluate(p < 0.05, screen$is_alt),
+             t(sapply(mine, function(a) evaluate(a < 0.05, screen$is_alt))))
+print(round(tab, 4))
+
+cat("\n--- Averaging over 200 repeated screens ---\n")
+res <- list()
+for (nm in names(mine)) res[[nm]] <- list(fwer = c(), fdp = c(), sens = c())
+for (rep in 1:200) {
+  s <- simulate_screen(G = 3000, seed = 9000 + rep)
+  for (nm in names(mine)) {
+    fn <- switch(nm, bonferroni = bonferroni_adjust, holm = holm_adjust,
+                 BH = bh_adjust, BY = by_adjust)
+    rej <- fn(s$p) < 0.05
+    V <- sum(rej & !s$is_alt)
+    res[[nm]]$fwer <- c(res[[nm]]$fwer, V >= 1)
+    res[[nm]]$fdp  <- c(res[[nm]]$fdp, V / max(sum(rej), 1))
+    res[[nm]]$sens <- c(res[[nm]]$sens, sum(rej & s$is_alt) / sum(s$is_alt))
+  }
+}
+guarantee <- c(bonferroni = "FWER <= 0.05", holm = "FWER <= 0.05",
+               BH = "FDR  <= 0.05", BY = "FDR  <= 0.05 (any dependence)")
+cat(sprintf("  %-12s%9s%9s%13s  guarantee\n", "method", "FWER", "FDR", "sensitivity"))
+for (nm in names(res)) {
+  cat(sprintf("  %-12s%9.3f%9.3f%13.3f  %s\n", nm, mean(res[[nm]]$fwer),
+              mean(res[[nm]]$fdp), mean(res[[nm]]$sens), guarantee[nm]))
+}
+extra <- sum(sapply(1:40, function(r) {
+  s <- simulate_screen(G = 3000, seed = 9000 + r)
+  sum(holm_adjust(s$p) < 0.05) - sum(bonferroni_adjust(s$p) < 0.05)
+}))
+cat(sprintf("\n  Holm rejects EVERYTHING Bonferroni rejects and sometimes more:\n"))
+cat(sprintf("  across 40 screens it made %d extra rejection(s). It is never\n", extra))
+cat("  worse, so there is no reason to prefer plain Bonferroni for FWER.\n")
+cat("  BH trades a controlled FDR for far greater sensitivity, and its\n")
+cat("  realised FDR sits BELOW 0.05 - conservative by the factor pi0 (8.6).\n")
+
+#' ## 4. Storey's pi0 and q-values, eq. (8.9)-(8.10)
+
+#+ storey
+header("4. Recovering the power BH leaves on the table (8.9)-(8.10)")
+storey_pi0 <- function(p, lambda = 0.5) min(1, mean(p > lambda) / (1 - lambda))
+qvalues <- function(p, lambda = 0.5) {
+  pi0 <- storey_pi0(p, lambda); G <- length(p); o <- order(p)
+  raw <- pi0 * G * p[o] / seq_len(G)
+  q <- numeric(G); q[o] <- pmin(rev(cummin(rev(raw))), 1); list(q = q, pi0 = pi0)
+}
+qv <- qvalues(p)
+cat(sprintf("  true pi0       = %.4f\n", 1 - mean(screen$is_alt)))
+cat(sprintf("  Storey pi0_hat = %.4f   (lambda = 0.5)\n", qv$pi0))
+cat(sprintf("\n  %8s%10s\n", "lambda", "pi0_hat"))
+for (lam in c(0.2, 0.4, 0.5, 0.6, 0.8)) cat(sprintf("  %8.1f%10.4f\n", lam, storey_pi0(p, lam)))
+bh <- bh_adjust(p)
+cat(sprintf("\n  BH at 0.05      : %5d discoveries, FDP = %.4f\n",
+            sum(bh < 0.05), sum(bh < 0.05 & !screen$is_alt) / max(sum(bh < 0.05), 1)))
+cat(sprintf("  q-value at 0.05 : %5d discoveries, FDP = %.4f\n",
+            sum(qv$q < 0.05), sum(qv$q < 0.05 & !screen$is_alt) / max(sum(qv$q < 0.05), 1)))
+
+#' ## 5. Local FDR, eq. (8.11): the gene AT the threshold
+
+#+ local-fdr
+header("5. FDR is an average; local fdr is per-feature (8.11)")
+sel <- which(bh < 0.05)
+if (length(sel) > 30) {
+  ranked <- sel[order(p[sel])]
+  k <- length(ranked)
+  bins <- list("strongest 20%" = ranked[1:floor(k/5)],
+               "middle 20%"    = ranked[floor(2*k/5):floor(3*k/5)],
+               "weakest 20% (at threshold)" = ranked[floor(4*k/5):k])
+  cat(sprintf("  %-32s%14s\n", "bin of the rejected list", "realised FDP"))
+  for (nm in names(bins)) cat(sprintf("  %-32s%14.3f\n", nm, mean(!screen$is_alt[bins[[nm]]])))
+  cat(sprintf("\n  Overall FDP across all %d rejections: %.3f\n", k,
+              mean(!screen$is_alt[ranked])))
+  cat("  Features near the cut-off are FAR more likely to be null than the\n")
+  cat("  nominal 5% suggests. Rank by effect size, and treat the tail of a\n")
+  cat("  significant list with scepticism.\n")
+}
+
+#' ## 6. Independent filtering -- and how to break it
+
+#+ filtering
+header("6. Independent filtering vs outcome-dependent filtering")
+s <- simulate_screen(G = 10000, seed = 802)
+rej_all <- bh_adjust(s$p) < 0.05
+keep_good <- s$base_mean > quantile(s$base_mean, 0.40)     # VALID: never saw labels
+rej_good <- rep(FALSE, nrow(s)); rej_good[keep_good] <- bh_adjust(s$p[keep_good]) < 0.05
+keep_bad <- abs(s$estimate) > quantile(abs(s$estimate), 0.40)  # INVALID: outcome-derived
+rej_bad <- rep(FALSE, nrow(s)); rej_bad[keep_bad] <- bh_adjust(s$p[keep_bad]) < 0.05
+for (z in list(list("no filter", rej_all), list("filter on mean expression (VALID)", rej_good),
+               list("filter on |effect size| (INVALID)", rej_bad))) {
+  r <- z[[2]]
+  cat(sprintf("  %-36s rejected=%5d  true pos=%4d  FDP=%.4f\n", z[[1]], sum(r),
+              sum(r & s$is_alt), sum(r & !s$is_alt) / max(sum(r), 1)))
+}
+cat("\n  Same three strategies under a COMPLETE null (no real effects at all):\n")
+fd <- t(sapply(1:120, function(rep) {
+  sn <- simulate_screen(G = 2000, pi0 = 1, seed = 7000 + rep)
+  kg <- sn$base_mean > quantile(sn$base_mean, 0.40)
+  kb <- abs(sn$estimate) > quantile(abs(sn$estimate), 0.40)
+  c(sum(bh_adjust(sn$p[kg]) < 0.05), sum(bh_adjust(sn$p[kb]) < 0.05))
+}))
+cat(sprintf("    mean false discoveries, expression filter : %.2f\n", mean(fd[, 1])))
+cat(sprintf("    mean false discoveries, effect-size filter: %.2f\n", mean(fd[, 2])))
+cat("  The outcome-dependent filter MANUFACTURES discoveries out of noise.\n")
+
+#' ## 7. Defining the family
+
+#+ family
+header("7. What is the family? (genes x cell types x contrasts)")
+ng <- 20000; nc <- 8; nk <- 3
+cat(sprintf("  %d genes x %d cell types x %d contrasts = %s hypotheses\n",
+            ng, nc, nk, format(ng * nc * nk, big.mark = ",")))
+cat(sprintf("\n  %-42s%22s\n", "adjustment family", "Bonferroni threshold"))
+for (z in list(list("within one gene list only", ng),
+               list("genes x cell types", ng * nc),
+               list("everything", ng * nc * nk)))
+  cat(sprintf("  %-42s%22.3e\n", z[[1]], 0.05 / z[[2]]))
+cat("\n  Adjusting within each cell type answers a LEGITIMATE but DIFFERENT\n")
+cat("  question from a global one. State which you mean.\n")
+
+#' ## 8. Figure
+
+#+ figure
+png(file.path(OUT, "multiple_testing.png"), width = 1300, height = 420, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+hist(p[!screen$is_alt], breaks = 40, col = rgb(0.2, 0.4, 0.7, 0.6), border = "white",
+     main = "Eq. (8.9): estimating pi0", xlab = "p-value")
+hist(p[screen$is_alt], breaks = 40, col = rgb(0.8, 0.3, 0.2, 0.6), border = "white", add = TRUE)
+abline(h = qv$pi0 * G / 40, col = "red", lty = 2)
+legend("topright", c("true null", "true alternative", "pi0 level"),
+       fill = c(rgb(0.2,0.4,0.7,0.6), rgb(0.8,0.3,0.2,0.6), NA),
+       border = c("black","black",NA), lty = c(NA,NA,2), col = c(NA,NA,"red"),
+       bty = "n", cex = 0.65)
+
+ps <- sort(p); j <- seq_along(ps)
+plot(j, ps, log = "xy", pch = ".", xlab = "rank j", ylab = "p-value",
+     main = "Eq. (8.5): the BH step-up rule")
+lines(j, 0.05 * j / G, col = "red", lwd = 2)
+abline(h = 0.05 / G, col = "forestgreen", lty = 2)
+legend("bottomright", c("sorted p", "BH line", "Bonferroni"),
+       col = c("black", "red", "forestgreen"), lty = c(NA, 1, 2), pch = c(20, NA, NA),
+       bty = "n", cex = 0.65)
+
+fdps <- sapply(res, function(z) mean(z$fdp)); sens <- sapply(res, function(z) mean(z$sens))
+plot(fdps, sens, pch = 19, cex = 1.6, col = "steelblue", xlab = "realised FDR",
+     ylab = "sensitivity", main = "The power/strictness trade-off",
+     xlim = c(0, 0.06), ylim = c(0, max(sens) * 1.2))
+text(fdps, sens, names(res), pos = 3, cex = 0.7)
+abline(v = 0.05, col = "red", lty = 2)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "multiple_testing.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 8)
+#'
+#' 1. FDR (BH) for discovery screens; **Holm** -- never plain Bonferroni -- for
+#'    a handful of confirmatory claims.
+#' 2. Look at the p-value histogram first.
+#' 3. Filter only on outcome-independent statistics, pre-specified.
+#' 4. Rank the surviving list by effect size, not adjusted p-value.
+#'
+#' **Next:** `09_power_and_sample_size.R`

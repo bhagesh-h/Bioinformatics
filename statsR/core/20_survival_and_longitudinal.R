@@ -1,0 +1,338 @@
+#' ---
+#' title: "Module 20 - Time-course, longitudinal, and survival data"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 28, equations (28.1)-(28.13)
+#'
+#' **Part A - trajectories:** random slopes (28.1)-(28.2), treatment x time,
+#' between vs within-person effects (28.3).
+#' **Part B - survival:** hazard and survival (28.4)-(28.5), Kaplan-Meier with
+#' Greenwood (28.6)-(28.7), log-rank (28.8), Cox (28.9)-(28.10), PH diagnostics
+#' (28.11), RMST (28.12), competing risks (28.13), and two named biases.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages({library(survival); library(nlme); library(splines)})
+MODULE_NAME <- "20_survival_and_longitudinal"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' # Part A: Longitudinal trajectories
+#' ## A1. The treatment x time interaction is the estimand, eq. (28.1)-(28.2)
+
+#+ trajectories
+header("A1. Repeated visits: the treatment x time interaction (28.1)-(28.2)")
+set.seed(2001)
+n_subj <- 30; n_visit <- 5
+dl <- do.call(rbind, lapply(seq_len(n_subj), function(s) {
+  arm <- s %% 2; b0 <- rnorm(1, 0, 1.5); b1 <- rnorm(1, 0, 0.25)
+  data.frame(subject = factor(sprintf("S%02d", s)), arm = arm, time = 0:(n_visit-1),
+             y = (12 + b0) + (0.15 + 0.35*arm + b1)*(0:(n_visit-1)) + rnorm(n_visit, 0, 0.6))
+}))
+m_wrong <- lm(y ~ time * arm, data = dl)                        # visits pooled
+m_rs <- lme(y ~ time * arm, random = ~ time | subject, data = dl)
+cat("  TRUE treatment x time interaction = 0.350\n")
+cat(sprintf("  %-34s%16s%9s%11s\n", "analysis", "beta(time:arm)", "SE", "p"))
+cs <- coef(summary(m_wrong))
+cat(sprintf("  %-34s%16.4f%9.4f%11.4f\n", "OLS, visits pooled (WRONG)",
+            cs["time:arm",1], cs["time:arm",2], cs["time:arm",4]))
+ts <- summary(m_rs)$tTable
+cat(sprintf("  %-34s%16.4f%9.4f%11.4f\n", "mixed model, random slope",
+            ts["time:arm","Value"], ts["time:arm","Std.Error"], ts["time:arm","p-value"]))
+cat(sprintf("\n  A main effect of `arm` describes only the BASELINE difference\n"))
+cat(sprintf("  (here %+.3f). The scientific question is the INTERACTION.\n",
+            ts["arm","Value"]))
+
+#' ## A2. Cross-sectional != longitudinal, eq. (28.3)
+
+#+ between-within
+header("A2. Between- vs within-person effects (28.3)")
+set.seed(2002)
+da <- do.call(rbind, lapply(1:60, function(s) {
+  base_age <- runif(1, 40, 80)
+  level <- 5 + 0.06*base_age + rnorm(1, 0, 0.5)   # BETWEEN: positive (cohort effect)
+  data.frame(subject = factor(sprintf("S%02d", s)), age = base_age + 0:3,
+             y = level - 0.10*(0:3) + rnorm(4, 0, 0.25))  # WITHIN: negative
+}))
+da$age_mean <- ave(da$age, da$subject)
+da$age_dev <- da$age - da$age_mean
+m_naive <- lm(y ~ age, data = da)
+m_sep <- lme(y ~ age_mean + age_dev, random = ~ 1 | subject, data = da)
+cat(sprintf("  naive pooled age slope          = %+.4f\n", coef(m_naive)["age"]))
+cat(sprintf("  between-person (age_mean) slope = %+.4f  (truth +0.06)\n",
+            fixef(m_sep)["age_mean"]))
+cat(sprintf("  within-person  (age_dev)  slope = %+.4f  (truth -0.10)\n",
+            fixef(m_sep)["age_dev"]))
+cat("\n  The naive analysis reports a POSITIVE age effect; the biology is a\n")
+cat("  NEGATIVE within-person decline. Always decompose (28.3) in cohorts.\n")
+
+#' # Part B: Survival analysis
+#' ## B1. Censoring, and why it cannot be ignored
+
+#+ censoring
+header("B1. Right-censoring: three wrong answers and one right one")
+simulate_survival <- function(n = 300, hr = 1.8, censor_rate = 0.9) {
+  arm <- rbinom(n, 1, 0.5)
+  base_hazard <- 0.08
+  T <- rexp(n, base_hazard * hr^arm)
+  ## size = n matters: 1/(base*censor_rate) is a SCALAR, so without `n` every
+  ## patient would share one censoring time.
+  C <- rexp(n, base_hazard * censor_rate)
+  data.frame(time = pmin(T, C), event = as.integer(T <= C), arm = arm, true_T = T)
+}
+set.seed(2004)
+d <- simulate_survival()
+cat(sprintf("  n = %d, events = %d (%.0f%%), censored = %d\n", nrow(d), sum(d$event),
+            100*mean(d$event), sum(!d$event)))
+km_all <- survfit(Surv(time, event) ~ 1, data = d)
+cat(sprintf("\n  TRUE median survival (uncensored truth) = %.2f\n", median(d$true_T)))
+cat(sprintf("  (a) mean observed time, ignoring censoring = %.2f   <- biased DOWN\n",
+            mean(d$time)))
+cat(sprintf("  (b) mean among events only                 = %.2f   <- biased DOWN more\n",
+            mean(d$time[d$event == 1])))
+cat(sprintf("  (c) Kaplan-Meier median (28.6)             = %.2f   <- correct\n",
+            summary(km_all)$table["median"]))
+cat("\n  Censored subjects are NOT failures and NOT missing: they contribute\n")
+cat("  information up to their censoring time. Requires NON-INFORMATIVE\n")
+cat("  censoring: T independent of C given covariates.\n")
+
+#' ## B2. Kaplan-Meier from scratch, eq. (28.6)-(28.7)
+
+#+ km
+header("B2. KM estimator and Greenwood's variance (28.6)-(28.7)")
+kaplan_meier <- function(time, event) {
+  ts <- sort(unique(time[event == 1]))
+  S <- 1; var_sum <- 0
+  do.call(rbind, lapply(ts, function(ti) {
+    n_i <- sum(time >= ti); d_i <- sum(time == ti & event == 1)
+    S <<- S * (1 - d_i/n_i)                                     # eq. (28.6)
+    if (n_i > d_i) var_sum <<- var_sum + d_i/(n_i*(n_i - d_i))  # eq. (28.7)
+    data.frame(t = ti, n_risk = n_i, d = d_i, S = S, se = S*sqrt(var_sum))
+  }))
+}
+mine <- kaplan_meier(d$time, d$event)
+sf <- survfit(Surv(time, event) ~ 1, data = d)
+idx <- round(c(0.1, 0.5, 0.9) * (nrow(mine) - 1)) + 1
+cat(sprintf("  %8s%11s%11s%15s%14s\n", "time", "n at risk", "S (mine)",
+            "S (survfit)", "Greenwood SE"))
+for (i in idx) {
+  ti <- mine$t[i]
+  s_sf <- summary(sf, times = ti)$surv
+  cat(sprintf("  %8.3f%11d%11.5f%15.5f%14.5f\n", ti, mine$n_risk[i], mine$S[i],
+              s_sf, mine$se[i]))
+}
+cat(sprintf("  max |mine - survfit| over all event times: %.2e\n",
+            max(abs(mine$S - summary(sf, times = mine$t)$surv))))
+cat("\n  ALWAYS show the number-at-risk table. The right tail of a KM curve is\n")
+cat("  estimated from very few subjects and looks far more precise than it is:\n")
+for (q in c(0.25, 0.5, 0.75, 0.95)) {
+  i <- max(1, round(q * nrow(mine)))
+  cat(sprintf("    at t = %6.2f: %3d at risk, S = %.3f +/- %.3f\n",
+              mine$t[i], mine$n_risk[i], mine$S[i], 1.96*mine$se[i]))
+}
+
+#' ## B3. Log-rank test, eq. (28.8)
+
+#+ logrank
+header("B3. Log-rank from scratch (28.8)")
+logrank_manual <- function(time, event, group) {
+  OE <- 0; V <- 0
+  for (ti in sort(unique(time[event == 1]))) {
+    at_risk <- time >= ti
+    n_i <- sum(at_risk); n_1i <- sum(at_risk & group == 1)
+    d_i <- sum(time == ti & event == 1)
+    d_1i <- sum(time == ti & event == 1 & group == 1)
+    if (n_i > 1) {
+      OE <- OE + d_1i - d_i * n_1i/n_i                          # eq. (28.8)
+      V <- V + d_i*(n_i - d_i)*n_1i*(n_i - n_1i)/(n_i^2*(n_i-1))
+    }
+  }
+  Z <- OE/sqrt(V); c(Z = Z, chi2 = Z^2, p = 2*pnorm(abs(Z), lower.tail = FALSE))
+}
+lr_mine <- logrank_manual(d$time, d$event, d$arm)
+lr_sd <- survdiff(Surv(time, event) ~ arm, data = d)
+cat(sprintf("  mine      : Z = %+.4f, chi2 = %.4f, p = %.3e\n",
+            lr_mine["Z"], lr_mine["chi2"], lr_mine["p"]))
+cat(sprintf("  survdiff(): chi2 = %.4f, p = %.3e\n", lr_sd$chisq,
+            pchisq(lr_sd$chisq, 1, lower.tail = FALSE)))
+cat("\n  The log-rank is most powerful under PROPORTIONAL HAZARDS and can have\n")
+cat("  near-zero power when survival curves CROSS.\n")
+
+#' ## B4. Cox model and the PH assumption, eq. (28.9)-(28.11)
+
+#+ cox
+header("B4. Cox proportional hazards and its diagnostic (28.9)-(28.11)")
+set.seed(7)
+d$age <- rnorm(nrow(d), 60, 10)
+cph <- coxph(Surv(time, event) ~ arm + age, data = d)
+print(summary(cph)$coefficients)
+cat(sprintf("\n  TRUE hazard ratio for arm = 1.80; estimated = %.3f\n",
+            exp(coef(cph)["arm"])))
+cat("\n  exp(beta) is a HAZARD RATIO: a ratio of instantaneous event rates\n")
+cat("  among those still at risk. NOT a risk ratio, NOT a ratio of survival\n")
+cat("  times.\n")
+cat(sprintf("\n  Effective sample size = NUMBER OF EVENTS, not subjects:\n"))
+cat(sprintf("    subjects = %d, events = %d, covariates = 2 -> %.0f events per\n",
+            nrow(d), sum(d$event), sum(d$event)/2))
+cat("    covariate (guidance: >= 10)\n")
+cat("\n  Proportional-hazards check (28.11), scaled Schoenfeld residuals:\n")
+print(cox.zph(cph)$table)
+cat("  Small p => the coefficient varies with time => PH is violated.\n")
+
+cat("\n  A dataset with a genuinely NON-proportional (crossing) effect:\n")
+set.seed(2005)
+n <- 400
+arm2 <- rbinom(n, 1, 0.5)
+T2 <- ifelse(arm2 == 1,
+             ifelse(runif(n) < 0.25, rexp(n, 1/2), rexp(n, 1/25)),
+             rexp(n, 1/10))
+C2 <- rexp(n, 1/30)
+d3 <- data.frame(time = pmin(T2, C2), event = as.integer(T2 <= C2), arm = arm2)
+cph3 <- coxph(Surv(time, event) ~ arm, data = d3)
+cat(sprintf("    Cox HR = %.3f, p = %.3f\n", exp(coef(cph3)["arm"]),
+            summary(cph3)$coefficients["arm", "Pr(>|z|)"]))
+cat(sprintf("    log-rank p = %.3f   <- little power against crossing\n",
+            pchisq(survdiff(Surv(time, event) ~ arm, data = d3)$chisq, 1,
+                   lower.tail = FALSE)))
+cat(sprintf("    PH test p  = %.4f   <- PH is violated\n",
+            cox.zph(cph3)$table["arm", "p"]))
+
+#' ## B5. RMST: an estimand that needs no PH assumption, eq. (28.12)
+
+#+ rmst
+header("B5. Restricted mean survival time (28.12)")
+rmst <- function(time, event, tau) {
+  km <- kaplan_meier(time, event)
+  km <- km[km$t <= tau, ]
+  ts <- c(0, km$t, tau); Ss <- c(1, km$S)
+  sum(Ss * diff(ts))                                            # eq. (28.12)
+}
+TAU <- 20
+for (row_ in list(list("proportional-hazards data", d), list("crossing-hazards data", d3))) {
+  dd <- row_[[2]]
+  r0 <- rmst(dd$time[dd$arm==0], dd$event[dd$arm==0], TAU)
+  r1 <- rmst(dd$time[dd$arm==1], dd$event[dd$arm==1], TAU)
+  cat(sprintf("  %-28s RMST(tau=%d): arm0 = %5.2f, arm1 = %5.2f, diff = %+6.2f\n",
+              row_[[1]], TAU, r0, r1, r1 - r0))
+}
+cat("\n  RMST differences are interpretable as 'time gained within tau' and\n")
+cat("  require NO proportional-hazards assumption.\n")
+
+#' ## B6. Competing risks, eq. (28.13)
+
+#+ competing
+header("B6. Competing risks (28.13)")
+set.seed(2006)
+n <- 800
+T1 <- rexp(n, 1/20); T2c <- rexp(n, 1/12); Cc <- rexp(n, 1/40)
+obs <- pmin(T1, T2c, Cc)
+cause <- ifelse(T1 <= T2c & T1 <= Cc, 1, ifelse(T2c < T1 & T2c <= Cc, 2, 0))
+t_eval <- 15
+km_naive <- survfit(Surv(obs, as.integer(cause == 1)) ~ 1)
+naive_risk <- 1 - summary(km_naive, times = t_eval)$surv
+cif <- function(time, cause, k, t_eval) {
+  o <- order(time); time <- time[o]; cause <- cause[o]
+  S <- 1; out <- 0
+  for (ti in sort(unique(time[cause > 0]))) {
+    n_i <- sum(time >= ti); d_k <- sum(time == ti & cause == k)
+    d_all <- sum(time == ti & cause > 0)
+    if (ti <= t_eval) out <- out + S * d_k/n_i                  # eq. (28.13)
+    S <- S * (1 - d_all/n_i)
+  }
+  out
+}
+cat(sprintf("  at t = %d:\n", t_eval))
+cat(sprintf("    TRUE probability of the event of interest = %.4f\n",
+            mean(T1 <= t_eval & T1 <= T2c)))
+cat(sprintf("    1 - Kaplan-Meier (naive)                  = %.4f   <- OVERESTIMATES\n",
+            naive_risk))
+cat(sprintf("    cumulative incidence function (28.13)     = %.4f   <- correct\n",
+            cif(obs, cause, 1, t_eval)))
+cat("\n  Treating a competing event as censoring asks 'what would happen in a\n")
+cat("  world where it cannot occur?' - usually not the question. Use CIF for\n")
+cat("  absolute risk; cause-specific hazards for aetiology.\n")
+
+#' ## B7. Two named biases
+
+#+ biases
+header("B7. Immortal time bias and optimal cut-point bias")
+set.seed(2007)
+n <- 600
+Ti <- rexp(n, 1/10); Ci <- rexp(n, 1/25)
+tt <- pmin(Ti, Ci); ev <- as.integer(Ti <= Ci)
+## "Responders" can only be assessed at 3 months - so to BE a responder you
+## must first SURVIVE 3 months. The label has NO real effect.
+responder <- as.integer(tt > 3 & runif(n) < 0.5)
+db <- data.frame(time = tt, event = ev, responder = responder)
+cph_bad <- coxph(Surv(time, event) ~ responder, data = db)
+land <- subset(db, time > 3); land$time <- land$time - 3
+cph_land <- coxph(Surv(time, event) ~ responder, data = land)
+cat("  TRUE effect of 'responder' status = NONE\n")
+cat(sprintf("  naive Cox HR                      = %.3f  (p = %.2e)   <- spurious\n",
+            exp(coef(cph_bad)), summary(cph_bad)$coefficients[1, "Pr(>|z|)"]))
+cat(sprintf("  landmark analysis at 3 months, HR = %.3f  (p = %.3f)   <- corrected\n",
+            exp(coef(cph_land)), summary(cph_land)$coefficients[1, "Pr(>|z|)"]))
+
+cat("\n  Optimal cut-point bias: dichotomising at the 'most significant'\n")
+cat("  threshold when the biomarker is PURE NOISE:\n")
+set.seed(2008)
+res_cut <- t(replicate(300, {
+  nn <- 200
+  Tx <- rexp(nn, 1/10); Cx <- rexp(nn, 1/20)
+  dd <- data.frame(time = pmin(Tx, Cx), event = as.integer(Tx <= Cx), bm = rnorm(nn))
+  ps <- sapply(seq(0.2, 0.8, 0.05), function(q) {
+    hi <- as.integer(dd$bm > quantile(dd$bm, q))
+    if (sum(hi) < 6 || sum(1-hi) < 6) return(NA)
+    pchisq(survdiff(Surv(time, event) ~ hi, data = dd)$chisq, 1, lower.tail = FALSE)
+  })
+  c(min(ps, na.rm = TRUE),
+    summary(coxph(Surv(time, event) ~ bm, data = dd))$coefficients[1, "Pr(>|z|)"])
+}))
+cat(sprintf("    'best' cut-point p < 0.05 : %.1f%%   <- should be 5%%\n",
+            100*mean(res_cut[, 1] < 0.05)))
+cat(sprintf("    continuous biomarker p<0.05: %.1f%%   <- calibrated\n",
+            100*mean(res_cut[, 2] < 0.05)))
+cat("  Keep the biomarker CONTINUOUS, or pre-specify the cut-point.\n")
+
+#' ## Figure
+
+#+ figure
+png(file.path(OUT, "survival.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+plot(NA, xlim = c(0, 4), ylim = range(dl$y), xlab = "visit", ylab = "y",
+     main = "Eq. (28.1): individual trajectories")
+for (s in levels(dl$subject)) {
+  sub <- dl[dl$subject == s, ]
+  lines(sub$time, sub$y, col = c("steelblue", "darkorange")[sub$arm[1]+1], lwd = 0.8)
+}
+plot(survfit(Surv(time, event) ~ arm, data = d), col = c("steelblue", "darkorange"),
+     lwd = 2, xlab = "time", ylab = "S(t)",
+     main = sprintf("Eq. (28.6): KM, log-rank p = %.1e", lr_mine["p"]))
+legend("topright", c("arm 0", "arm 1"), col = c("steelblue", "darkorange"),
+       lwd = 2, bty = "n", cex = 0.7)
+plot(survfit(Surv(time, event) ~ arm, data = d3), col = c("steelblue", "darkorange"),
+     lwd = 2, xlab = "time", ylab = "S(t)",
+     main = "Crossing curves: PH violated")
+hist(res_cut[, 1], breaks = 30, col = adjustcolor("steelblue", 0.6), border = "white",
+     main = "Optimal cut-point bias", xlab = "p-value under a TRUE null")
+hist(res_cut[, 2], breaks = 30, col = adjustcolor("darkorange", 0.6), border = "white",
+     add = TRUE)
+abline(v = 0.05, col = "red", lty = 2)
+legend("topright", c("'optimal' cut-point", "continuous"),
+       fill = c(adjustcolor("steelblue",0.6), adjustcolor("darkorange",0.6)),
+       bty = "n", cex = 0.65)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "survival.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 28)
+#'
+#' 1. Repeated measures -> mixed model with treatment x time; separate
+#'    between- from within-person effects.
+#' 2. Time-to-event -> Kaplan-Meier + Cox, with a PH check and at-risk table.
+#' 3. Count EVENTS, not subjects, when judging power.
+#' 4. Competing risks -> CIF (28.13), never 1-KM.
+#' 5. Never dichotomise at a data-chosen optimal cut-point.
+#'
+#' **Next:** `21_prediction_and_validation.R`

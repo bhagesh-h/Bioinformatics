@@ -1,0 +1,459 @@
+---
+title: "Foundations 6 - How statistics connects variables"
+output: html_document
+---
+
+**Curriculum link:** `stats.md` -> Part 0, §0.9, equation (0.16)
+**Assumes:** `F1`-`F5`.
+
+## The last foundation
+
+Most real questions are not "what is the average?" but "**does this relate
+to that?**" Does the drug change the marker; does expression predict
+survival.
+
+This module covers two things, and they are the two that matter most in the
+rest of the course:
+
+1. **One equation** - $Y = \beta_0 + \beta_1 X_1 + \cdots + \varepsilon$ -
+   which turns out to be nearly every method you have heard of, in disguise.
+2. **Four roles a variable can play** - confounder, mediator, collider,
+   precision variable - which look *identical in the data* and demand
+   opposite treatment.
+
+The second is where careers go wrong. "Adjust for more variables to be safe"
+is one of the most damaging pieces of folk wisdom in applied science.
+
+```{r setup, message = FALSE}
+MODULE_NAME <- "F6_connecting_variables"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(106)
+```
+
+## 1. Reading eq. (0.16)
+
+```{r line}
+header("1. Fitting a line, and what the numbers mean")
+TRUE_B0 <- 5; TRUE_B1 <- 2.5; NOISE <- 3
+n <- 200
+dose <- runif(n, 0, 10)
+response <- TRUE_B0 + TRUE_B1*dose + rnorm(n, 0, NOISE)
+fit <- lm(response ~ dose)
+cs <- coef(summary(fit))
+b0 <- cs["(Intercept)", "Estimate"]; b1 <- cs["dose", "Estimate"]
+se1 <- cs["dose", "Std. Error"]
+cat(sprintf("  %-36s%10s%11s%9s\n", "quantity", "truth", "estimate", "SE"))
+cat(sprintf("  %-36s%10.2f%11.3f%9.3f\n", "intercept  beta_0", TRUE_B0, b0,
+            cs["(Intercept)", "Std. Error"]))
+cat(sprintf("  %-36s%10.2f%11.3f%9.3f\n", "slope      beta_1", TRUE_B1, b1, se1))
+cat(sprintf("  %-36s%10.2f%11.3f\n", "residual SD (the noise)", NOISE, sigma(fit)))
+cat(sprintf("
+  How to read them:
+
+    beta_0 = %.2f  the predicted response when dose = 0. Often meaningless on
+                  its own (nobody gives a dose of 0), but the line has to
+                  start somewhere.
+
+    beta_1 = %.2f  THE ANSWER. Increase the dose by one unit and the response
+                  goes up by about %.2f. This is the slope, and in almost every
+                  analysis in this course the estimate you care about is a
+                  slope like this one.
+
+    residual   what the model failed to explain. Every observation sits some
+               distance off the line; those distances are the epsilon in
+               eq. (0.16), and their spread is what all your standard errors
+               are built from.
+
+  And the interval, exactly as in F5:
+    95%% CI for the slope = %.3f +/- 1.96 x %.3f
+                         = (%.3f, %.3f)\n",
+  b0, b1, b1, b1, se1, b1 - 1.96*se1, b1 + 1.96*se1))
+```
+
+## 2. A t-test IS a linear model
+
+```{r ttest-lm}
+header("2. The same answer, three different names")
+g0 <- rnorm(30, 10, 2); g1 <- rnorm(30, 12, 2)
+df <- data.frame(y = c(g0, g1),
+                 group = factor(rep(c("control", "drug"), each = 30),
+                                levels = c("control", "drug")))
+tt <- t.test(g1, g0, var.equal = TRUE)
+lmfit <- lm(y ~ group, df)
+av <- anova(lmfit)
+cat(sprintf("  %-34s%12s%14s\n", "method", "estimate", "p-value"))
+cat(sprintf("  %-34s%12.4f%14.6f\n", "two-sample t-test", mean(g1) - mean(g0),
+            tt$p.value))
+cat(sprintf("  %-34s%12.4f%14.6f\n", "linear model  y ~ group",
+            coef(lmfit)["groupdrug"], coef(summary(lmfit))["groupdrug", "Pr(>|t|)"]))
+cat(sprintf("  %-34s%12s%14.6f\n", "one-way ANOVA", "", av[["Pr(>F)"]][1]))
+cat(sprintf("\n  t statistic from the t-test : %.6f\n", tt$statistic))
+cat(sprintf("  t statistic from the model  : %.6f\n",
+            coef(summary(lmfit))["groupdrug", "t value"]))
+cat("
+  Identical to six decimal places, because they are the same calculation.
+
+  The trick is how a categorical predictor enters the equation: R turns the
+  factor into a 0/1 column ('groupdrug'), so beta_1 is the difference between
+  the group means, and testing beta_1 = 0 IS the t-test.
+
+  This is why Topic 11 calls the linear model 'the core framework'. Learning
+  twenty named tests is memorisation. Learning eq. (0.16) and how each kind of
+  predictor and outcome plugs into it is understanding:
+
+    binary predictor       -> t-test
+    categorical predictor  -> ANOVA
+    continuous predictor   -> regression
+    several predictors     -> multiple regression / ANCOVA
+    binary OUTCOME         -> logistic regression      (Topic 13)
+    count OUTCOME          -> Poisson / neg. binomial  (Topic 13)
+    grouped observations   -> mixed model              (Topic 14)
+    time-to-event OUTCOME  -> Cox regression           (Topic 28)\n")
+```
+
+## 3. What "adjusting for" actually does
+
+```{r adjusting}
+header("3. Holding other things fixed")
+n <- 400
+age <- rnorm(n, 60, 10)
+## Treatment is given more often to older patients - so age is a CONFOUNDER.
+treated <- rbinom(n, 1, plogis((age - 60)/5))
+TRUE_TREAT_EFFECT <- -2
+outcome <- 30 + TRUE_TREAT_EFFECT*treated + 0.5*age + rnorm(n, 0, 3)
+d <- data.frame(age, treated, outcome)
+m_crude <- lm(outcome ~ treated, d)
+m_adj <- lm(outcome ~ treated + age, d)
+cat(sprintf("  TRUE treatment effect = %+.2f\n\n", TRUE_TREAT_EFFECT))
+cat(sprintf("  %-36s%24s%10s\n", "model", "treatment coefficient", "bias"))
+cat(sprintf("  %-36s%24.3f%+10.3f\n", "outcome ~ treated",
+            coef(m_crude)["treated"], coef(m_crude)["treated"] - TRUE_TREAT_EFFECT))
+cat(sprintf("  %-36s%24.3f%+10.3f\n", "outcome ~ treated + age",
+            coef(m_adj)["treated"], coef(m_adj)["treated"] - TRUE_TREAT_EFFECT))
+cat("
+  The crude comparison has the WRONG SIGN: a drug that helps appears to harm,
+  because the people who got it were older, and age drives the outcome.
+
+  Adding age to the model recovers the truth. 'beta_treated, adjusting for
+  age' means: among patients OF THE SAME AGE, what is the difference? That is
+  what 'holding other predictors fixed' buys you, and it is the entire
+  mechanism of confounder control.
+
+  The crude comparison is not badly ESTIMATED - its standard error is small
+  and its p-value is tiny. It is precisely and confidently wrong, which is the
+  dangerous kind of wrong (F1, section 4).\n")
+```
+
+## 4. The four roles: and why "adjust for everything" is wrong
+
+```{r roles}
+header("4. Confounder, mediator, collider, precision variable")
+N <- 4000
+TRUE_EFFECT <- 1
+results <- list()
+## CONFOUNDER: Z causes both X and Y
+z <- rnorm(N); x <- 0.9*z + rnorm(N); y <- TRUE_EFFECT*x + 1.2*z + rnorm(N)
+results[["confounder"]] <- list("Z -> X and Z -> Y", x, y, z, "ADJUST")
+## MEDIATOR: X causes M, M causes Y (M is on the causal path)
+x <- rnorm(N); m <- 1.1*x + rnorm(N); y <- 0.4*x + 1.0*m + rnorm(N)
+results[["mediator"]] <- list("X -> M -> Y", x, y, m, "DO NOT")
+## COLLIDER: X and Y both cause C
+x <- rnorm(N); y <- TRUE_EFFECT*x + rnorm(N); cc <- 1.0*x + 1.0*y + rnorm(N)
+results[["collider"]] <- list("X -> C <- Y", x, y, cc, "DO NOT")
+## PRECISION VARIABLE: W causes Y only
+x <- rnorm(N); w <- rnorm(N); y <- TRUE_EFFECT*x + 2.0*w + rnorm(N)
+results[["precision var."]] <- list("W -> Y only", x, y, w, "ADJUST")
+cat(sprintf("  %-16s%-20s%9s%9s%10s%9s%9s\n", "role", "structure", "unadj.",
+            "(SE)", "adjusted", "(SE)", "verdict"))
+for (role in names(results)) {
+  r <- results[[role]]
+  dd <- data.frame(x = r[[2]], y = r[[3]], z = r[[4]])
+  un <- summary(lm(y ~ x, dd))$coefficients
+  ad <- summary(lm(y ~ x + z, dd))$coefficients
+  cat(sprintf("  %-16s%-20s%9.3f%9.3f%10.3f%9.3f%9s\n", role, r[[1]],
+              un["x", 1], un["x", 2], ad["x", 1], ad["x", 2], r[[5]]))
+}
+cat(sprintf("
+  The true X -> Y effect is %.1f in the confounder, collider and precision
+  rows (the mediator row is deliberately different - see below).
+
+  Read each row:
+
+    CONFOUNDER      unadjusted is badly wrong; adjusting FIXES it.
+                    -> you MUST adjust.
+
+    MEDIATOR        unadjusted gives the TOTAL effect of X on Y (about 1.5:
+                    the direct 0.4 plus the 1.1 that flows through M).
+                    Adjusting gives only the DIRECT effect (0.4), because you
+                    have blocked the pathway through which the treatment
+                    works. Neither is wrong - they answer different questions.
+                    If you want 'does the drug help?', do NOT adjust.
+
+    COLLIDER        unadjusted is CORRECT; adjusting BREAKS it, pushing the
+                    estimate far from the truth. Conditioning on a common
+                    effect makes its causes appear related when they are not.
+                    -> you must NOT adjust.
+
+    PRECISION VAR.  the estimate barely moves - no bias either way - but
+                    compare the two SE columns: adjusting roughly HALVES the
+                    standard error, because W explained a big chunk of the
+                    noise in Y. Free precision. -> adjust.
+
+  NOW THE POINT. Every one of those Z variables is strongly associated with Y.
+  Every one improves the model fit. NOTHING IN THE DATA distinguishes them. A
+  confounder and a collider are statistically indistinguishable.
+
+  The distinction comes from knowing HOW THE DATA WERE GENERATED - from
+  biology, and from the time order of events. That is why you draw the causal
+  diagram BEFORE you fit, and why automatic variable selection cannot be a
+  substitute for thinking.
+
+  The one rule that is nearly always safe:
+      NEVER adjust for anything measured AFTER the treatment,
+  because such a variable is a mediator, or a collider, or both.\n", TRUE_EFFECT))
+```
+
+## 5. Fit statistics cannot save you
+
+```{r fitstats}
+header("5. Every fit statistic says to include the collider")
+x <- rnorm(N); y <- TRUE_EFFECT*x + rnorm(N); cc <- 1.0*x + 1.0*y + rnorm(N)
+dd <- data.frame(x, y, c = cc)
+m1 <- lm(y ~ x, dd); m2 <- lm(y ~ x + c, dd)
+cat(sprintf("  %-22s%12s%12s%11s%10s%9s\n", "model", "R-squared", "AIC",
+            "resid SD", "beta_x", "bias"))
+for (nm in c("y ~ x", "y ~ x + c")) {
+  m <- if (nm == "y ~ x") m1 else m2
+  cat(sprintf("  %-22s%12.4f%12.1f%11.4f%10.3f%+9.3f\n", nm,
+              summary(m)$r.squared, AIC(m), sigma(m), coef(m)["x"],
+              coef(m)["x"] - TRUE_EFFECT))
+}
+cat(sprintf("\n  p-value for the collider term: %.3e\n",
+            coef(summary(m2))["c", "Pr(>|t|)"]))
+cat("
+  The model with the collider has a higher R-squared, a much better AIC, a
+  smaller residual SD, and an overwhelmingly significant coefficient.
+
+  It is also the wrong answer.
+
+  Every automatic model-selection procedure - stepwise regression, 'include
+  anything with p < 0.1', minimise AIC - would choose it. Model fit measures
+  how well you PREDICT y. It says nothing about whether beta_x means what you
+  want it to mean. Prediction and causal estimation are different jobs
+  (Topics 31 and 32), and a procedure tuned for one can be actively harmful
+  for the other.\n")
+```
+
+## 6. Association is not causation: but randomisation fixes it
+
+```{r randomisation}
+header("6. Why randomisation is worth more than any analysis")
+study <- function(randomised, reps = 800) {
+  ests <- replicate(reps, {
+    z_ <- rnorm(300)                                # a hidden common cause
+    x_ <- if (randomised) rnorm(300) else 0.9*z_ + rnorm(300)
+    y_ <- TRUE_EFFECT*x_ + 1.2*z_ + rnorm(300)
+    coef(lm(y_ ~ x_))["x_"]
+  })
+  c(mean(ests), sd(ests))
+}
+for (lab in c("randomised experiment", "observational study")) {
+  r <- study(lab == "randomised experiment")
+  cat(sprintf("  %-28sestimate = %6.3f  (truth %.1f), SD across studies = %.3f\n",
+              lab, r[1], TRUE_EFFECT, r[2]))
+}
+cat("
+  In the randomised version, nothing can have caused both X and Y, because YOU
+  caused X - with a coin flip. Confounding is eliminated BY DESIGN, and the
+  crude comparison is already correct. No adjustment needed, no assumptions
+  about which variables matter.
+
+  In the observational version the estimate is badly biased, and no amount of
+  data fixes it (F1, Problem 1). You can adjust for confounders you measured
+  and thought of. You cannot adjust for the ones you did not.
+
+  This is why one randomised experiment is worth a great deal more than a
+  larger observational study, and why Topic 32 is mostly about what you must
+  ASSUME when randomisation is impossible.\n")
+```
+
+## 7. Figure
+
+```{r figure}
+png(file.path(OUT, "connecting_variables.png"), width = 1250, height = 430, res = 110)
+par(mfrow = c(1, 3), mar = c(4.4, 4.4, 2.6, 1))
+plot(dose, response, pch = 16, cex = 0.5, col = adjustcolor("steelblue", 0.5),
+     xlab = "dose", ylab = "response", main = "Eq. (0.16): a line through data")
+abline(fit, col = "firebrick", lwd = 2)
+older <- d$age > median(d$age)
+plot(jitter(d$treated, 0.3), d$outcome, pch = 16, cex = 0.45,
+     col = adjustcolor(ifelse(older, "firebrick", "steelblue"), 0.5),
+     xaxt = "n", xlab = "", ylab = "outcome",
+     main = "Confounding: who got treated matters")
+axis(1, 0:1, c("untreated", "treated"))
+legend("topleft", c("younger", "older"), col = c("steelblue", "firebrick"),
+       pch = 16, bty = "n", cex = 0.75)
+un_v <- ad_v <- numeric(length(results))
+for (i in seq_along(results)) {
+  r <- results[[i]]; dd2 <- data.frame(x = r[[2]], y = r[[3]], z = r[[4]])
+  un_v[i] <- coef(lm(y ~ x, dd2))["x"]; ad_v[i] <- coef(lm(y ~ x + z, dd2))["x"]
+}
+bp <- barplot(rbind(un_v, ad_v), beside = TRUE, names.arg = names(results),
+              col = c("steelblue", "darkorange"), ylab = "estimated beta_x",
+              main = "Adjusting helps, harms, or does nothing", cex.names = 0.7)
+abline(h = TRUE_EFFECT, lty = 2, lwd = 1.5)
+legend("topright", c("unadjusted", "adjusted", "truth"),
+       fill = c("steelblue", "darkorange", NA), border = c(1, 1, NA),
+       lty = c(NA, NA, 2), bty = "n", cex = 0.7)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "connecting_variables.png"), "\n")
+```
+
+# PROBLEMS
+
+### Problem 1: Correlation, slope, and $R^2$
+
+```{r problem1}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# cat(sprintf("  %-12s%9s%8s%15s%12s%11s\n", "noise SD", "slope", "SE",
+#             "correlation r", "R-squared", "p"))
+# for (noise in c(0.5, 2.0, 6.0, 20.0)) {
+#   xx <- runif(300, 0, 10); yy <- 5 + 2.5*xx + rnorm(300, 0, noise)
+#   f <- lm(yy ~ xx); cf <- coef(summary(f))
+#   cat(sprintf("  %-12.1f%9.3f%8.3f%15.3f%12.3f%11.2e\n", noise,
+#               cf["xx", 1], cf["xx", 2], cor(xx, yy), summary(f)$r.squared,
+#               cf["xx", 4]))
+# }
+# cat(sprintf("\n  check: R-squared equals r^2 -> %.4f^2 = %.4f\n",
+#             cor(xx, yy), cor(xx, yy)^2))
+#
+# ## The SLOPE stays near 2.5 in every row. It is the EFFECT SIZE: how much y
+# ## changes per unit of x, in the units of the measurement. It does not care
+# ## how noisy the data is.
+# ##
+# ## The CORRELATION and R-SQUARED collapse as noise grows. They measure how
+# ## TIGHTLY the points hug the line - a mixture of the effect and the noise.
+# ##
+# ## So: report the SLOPE when you want to know how big the effect is, and the
+# ## correlation when you want to know how predictable y is from x. A huge
+# ## slope with r = 0.1 is a real, large effect that explains almost nothing;
+# ## r = 0.9 with a tiny slope is a very predictable, biologically trivial
+# ## relationship. Papers confuse these constantly. (Topic 10.)
+```
+
+### Problem 2: Simpson's paradox
+
+```{r problem2}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# parts <- list()
+# for (g in 0:3) {
+#   base <- c(0, 6, 12, 18)[g + 1]
+#   xg <- rnorm(150, base, 1.2)
+#   yg <- 30 - 1.5*base + (-0.8)*(xg - base) + rnorm(150, 0, 1)
+#   parts[[g + 1]] <- data.frame(x = xg, y = yg, g = paste0("g", g))
+# }
+# dp <- do.call(rbind, parts); dp$g <- factor(dp$g)
+# cat(sprintf("  ignoring the group      : slope = %+.3f\n",
+#             coef(lm(y ~ x, dp))["x"]))
+# cat(sprintf("  adjusting for the group : slope = %+.3f\n",
+#             coef(lm(y ~ x + g, dp))["x"]))
+# cat("\n  slope computed separately inside each group:\n")
+# for (gg in levels(dp$g))
+#   cat(sprintf("    %s: %+.3f\n", gg, coef(lm(y ~ x, subset(dp, g == gg)))["x"]))
+#
+# ## The overall slope is POSITIVE. Every within-group slope is NEGATIVE. Both
+# ## are correct descriptions of the same data - they answer different
+# ## questions, and only one of them is usually the question you meant.
+# ##
+# ## This is Simpson's paradox, and it is confounding in its purest form: the
+# ## group drives both x and y, so comparing across groups mixes the two.
+# ##
+# ## It is not a curiosity. It appears whenever you pool across batches,
+# ## centres, cell types or donors - which in bioinformatics is always. It is
+# ## why Topic 19 insists on modelling the batch, and why 'we combined the two
+# ## cohorts to increase power' deserves a hard look.
+```
+
+### Problem 3: Build your own collider bias
+
+```{r problem3}
+```
+```{r YOUR CODE HERE}
+
+```
+```{r SOLUTION (uncomment to check)}
+# N2 <- 200000
+# ## Two completely unrelated conditions in the general population.
+# disease_a <- runif(N2) < 0.10
+# disease_b <- runif(N2) < 0.10
+# ## Either one makes admission more likely. Admission is the COLLIDER.
+# admitted <- runif(N2) < (0.02 + 0.30*disease_a + 0.30*disease_b)
+# assoc <- function(a, b) {
+#   ## Odds ratio between two binary variables.
+#   n11 <- sum(a & b); n10 <- sum(a & !b)
+#   n01 <- sum(!a & b); n00 <- sum(!a & !b)
+#   (n11*n00)/max(n10*n01, 1)
+# }
+# cat(sprintf("  %-34s%10s%20s\n", "population studied", "n", "odds ratio A vs B"))
+# cat(sprintf("  %-34s%10s%20.3f\n", "everyone (the truth)",
+#             format(N2, big.mark = ","), assoc(disease_a, disease_b)))
+# cat(sprintf("  %-34s%10s%20.3f\n", "only hospitalised patients",
+#             format(sum(admitted), big.mark = ","),
+#             assoc(disease_a[admitted], disease_b[admitted])))
+# cat(sprintf("  %-34s%10s%20.3f\n", "only NON-hospitalised people",
+#             format(sum(!admitted), big.mark = ","),
+#             assoc(disease_a[!admitted], disease_b[!admitted])))
+#
+# ## In the whole population the odds ratio is 1.0 - the diseases are
+# ## unrelated, exactly as constructed. Among hospitalised patients it is well
+# ## below 1, implying one disease PROTECTS against the other.
+# ##
+# ## The reason: if you are in hospital and you do not have disease A, you
+# ## probably have B - that is why you are there. Conditioning on the common
+# ## effect creates the association.
+# ##
+# ## This is Berkson's paradox, and it is not hypothetical. It contaminates any
+# ## analysis restricted to a selected group: hospital records, patients who
+# ## survived long enough to be biopsied, cells that passed a QC filter,
+# ## samples with enough RNA to sequence. Whenever your sample was SELECTED on
+# ## something your variables affect, ask whether you have conditioned on a
+# ## collider.
+```
+
+## What to take away
+
+1. **Eq. (0.16) is the spine of the course.**
+2. A coefficient means "change in $Y$ per unit of $X$, **holding the other
+   predictors fixed**".
+3. **Four roles, opposite treatments:** adjust for confounders and precision
+   variables; do not adjust for mediators or colliders.
+4. **The data cannot tell you which is which.**
+5. **Fit statistics actively mislead here.**
+6. **Randomisation beats adjustment.**
+
+
+## You have finished the foundations
+
+You now have everything you need for the main course:
+
+* what a unit, a population and a sample are (`F1`)
+* probability, independence, and conditional probability (`F2`)
+* the distributions and what mechanisms produce them (`F3`)
+* estimates, standard errors and the central limit theorem (`F4`)
+* confidence intervals and every kind of p-value (`F5`)
+* the linear model and the four causal roles (`F6`)
+
+**Go to `statsR/core/01_study_design_and_estimands.R`.** Topic 1 is where
+the beginner material and the professional material meet, and it is the
+single most important topic in the course.

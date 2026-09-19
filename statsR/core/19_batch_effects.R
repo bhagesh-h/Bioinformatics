@@ -1,0 +1,277 @@
+#' ---
+#' title: "Module 19 - Batch effects and unwanted variation"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 19, equations (19.1)-(19.6)
+#'
+#' ## What you will learn
+#'
+#' 1. The location-scale model (19.1) and a from-scratch ComBat-style
+#'    correction (19.2) -- including **why the design must be supplied**.
+#' 2. Identifiability (19.3): complete confounding is unfixable.
+#' 3. **Model-based adjustment (19.4) vs correcting the matrix.**
+#' 4. Surrogate variables (19.5) when batch is unrecorded.
+#' 5. The two-sided diagnostic: batch removal AND biology preservation.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "19_batch_effects"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. Simulating the location-scale model, eq. (19.1)
+#'
+#' $$Y_{ijg}=\alpha_g+\mathbf x_j'\boldsymbol\beta_g+\gamma_{ig}+\delta_{ig}\varepsilon_{ijg}$$
+
+#+ simulate
+header("1. A multi-batch experiment with known truth (19.1)")
+simulate_batches <- function(n_per_group = 12, G = 2000, n_de = 200, effect = 1.8,
+                             batch_shift = 1.5, batch_scale = 1.6, confounding = 0) {
+  n <- 2 * n_per_group
+  condition <- rep(c("ctrl", "trt"), each = n_per_group)
+  follow <- runif(n) < confounding
+  batch <- ifelse(follow, ifelse(condition == "ctrl", "b1", "b2"),
+                  sample(c("b1", "b2"), n, TRUE))
+  ## Guard against n_de > G (the identifiability demo below uses a small G).
+  n_de <- min(n_de, G)
+  alpha <- rnorm(G, 8, 1.5)
+  beta <- numeric(G); beta[seq_len(n_de)] <- effect * sample(c(-1, 1), n_de, TRUE)
+  gamma <- rnorm(G, 0, batch_shift)
+  delta <- exp(rnorm(G, 0, log(batch_scale)))
+  Y <- matrix(0, G, n)
+  for (j in seq_len(n)) {
+    shift <- if (batch[j] == "b2") gamma else 0
+    scl <- if (batch[j] == "b2") delta else 1
+    Y[, j] <- alpha + beta * (condition[j] == "trt") + shift + scl * rnorm(G)
+  }
+  dimnames(Y) <- list(sprintf("G%04d", seq_len(G)), sprintf("S%02d", seq_len(n)))
+  list(Y = Y, meta = data.frame(condition = condition, batch = batch,
+                                row.names = colnames(Y)),
+       truth = beta != 0)
+}
+set.seed(1901)
+sim <- simulate_batches()
+print(table(sim$meta$condition, sim$meta$batch))
+cat(sprintf("\n  %d of %d genes are truly differential\n", sum(sim$truth), length(sim$truth)))
+
+#' ## 2. Diagnose before correcting: PC x metadata
+
+#+ diagnose
+header("2. Which factor dominates the variance?")
+pc_metadata_table <- function(Y, meta, n_pc = 4) {
+  pca <- prcomp(t(Y), center = TRUE)
+  pve <- pca$sdev^2 / sum(pca$sdev^2)
+  out <- data.frame(PC = 1:n_pc, PVE = pve[1:n_pc])
+  for (col in names(meta))
+    out[[col]] <- sapply(1:n_pc, function(j)
+      summary(lm(pca$x[, j] ~ factor(meta[[col]])))$r.squared)
+  list(tab = out, scores = pca$x, pve = pve)
+}
+d1 <- pc_metadata_table(sim$Y, sim$meta)
+print(format(d1$tab, digits = 3), row.names = FALSE)
+cat("\n  PC1 is dominated by BATCH. Build this table before interpreting\n")
+cat("  anything (stats.md eq. 17.6).\n")
+
+#' ## 3. Identifiability, eq. (19.3)
+
+#+ identifiability
+header("3. Complete vs partial confounding (19.3)")
+cat(sprintf("  %-14s%-26s%12s%18s%8s\n", "confounding", "cond x batch table",
+            "rank/ncol", "R^2(cond~batch)", "VIF"))
+for (conf in c(0, 0.5, 0.8, 1.0)) {
+  set.seed(1902 + round(conf*10))
+  s <- simulate_batches(confounding = conf, G = 50)
+  ct <- as.vector(table(s$meta$condition, s$meta$batch))
+  X <- model.matrix(~ factor(condition) + factor(batch), data = s$meta)
+  r2 <- suppressWarnings(cor(as.numeric(s$meta$condition == "trt"),
+                             as.numeric(s$meta$batch == "b2"))^2)
+  if (is.na(r2)) r2 <- 1
+  cat(sprintf("  %-14.1f%-26s%12s%18.3f%8s\n", conf, paste(ct, collapse = " "),
+              sprintf("%d/%d", qr(X)$rank, ncol(X)), r2,
+              if (r2 < 1) sprintf("%.2f", 1/(1-r2)) else "Inf"))
+}
+cat("\n  At confounding = 1.0 the design matrix is RANK DEFICIENT: the\n")
+cat("  condition effect is not estimable by ANY method. At 0.8 it is\n")
+cat("  estimable but the SE is inflated by sqrt(VIF).\n")
+
+#' ## 4. ComBat-style correction from scratch, eq. (19.2)
+
+#+ combat
+header("4. Location-scale correction, with and without the design (19.2)")
+combat_like <- function(Y, batch, mod = NULL) {
+  ## The non-empirical-Bayes core of ComBat, stats.md eq. (19.2). `mod` is the
+  ## BIOLOGICAL design; supplying it is what PROTECTS the biology.
+  batch <- factor(batch); levs <- levels(batch)
+  B <- model.matrix(~ batch - 1)
+  X <- if (is.null(mod)) B else cbind(B, mod)
+  coef <- qr.coef(qr(X), t(Y))
+  n_b <- ncol(B)
+  w <- as.numeric(table(batch)) / length(batch)
+  grand <- as.vector(w %*% coef[1:n_b,, drop = FALSE])
+  bio <- if (is.null(mod)) 0 else mod %*% coef[-(1:n_b),, drop = FALSE]
+  fitted <- X %*% coef
+  resid <- t(Y) - fitted
+  pooled_var <- colSums(resid^2) / (nrow(X) - ncol(X))
+  Ystar <- Y
+  for (l in levs) {
+    sel <- batch == l
+    delta <- sqrt(pmax(colMeans(resid[sel,, drop = FALSE]^2) /
+                         pmax(pooled_var, 1e-12), 1e-12))
+    centred <- sweep(t(Y[, sel, drop = FALSE]) - fitted[sel,, drop = FALSE], 2, delta, "/")
+    add <- sweep(centred, 2, grand, "+")
+    if (!is.null(mod)) add <- add + bio[sel,, drop = FALSE]
+    Ystar[, sel] <- t(add)
+  }
+  Ystar
+}
+de_test <- function(Y, meta) {
+  a <- Y[, meta$condition == "ctrl", drop = FALSE]
+  b <- Y[, meta$condition == "trt", drop = FALSE]
+  n1 <- ncol(a); n2 <- ncol(b)
+  m1 <- rowMeans(a); m2 <- rowMeans(b)
+  v1 <- apply(a, 1, var); v2 <- apply(b, 1, var)
+  se <- sqrt(v1/n1 + v2/n2)
+  df <- (v1/n1 + v2/n2)^2 / ((v1/n1)^2/(n1-1) + (v2/n2)^2/(n2-1))
+  2 * pt(abs((m1 - m2)/se), df, lower.tail = FALSE)
+}
+de_adjusted <- function(Y, meta) {                               # eq. (19.4)
+  X <- model.matrix(~ factor(condition) + factor(batch), data = meta)
+  coef <- qr.coef(qr(X), t(Y))
+  resid <- t(Y) - X %*% coef
+  dof <- nrow(X) - ncol(X)
+  s2 <- colSums(resid^2) / dof
+  se <- sqrt(s2 * chol2inv(qr.R(qr(X)))[2, 2])
+  2 * pt(abs(coef[2, ] / se), dof, lower.tail = FALSE)
+}
+evaluate <- function(pv, truth, label) {
+  q <- p.adjust(pv, "BH"); rej <- q < 0.05
+  tp <- sum(rej & truth); fp <- sum(rej & !truth)
+  cat(sprintf("  %-40s%7d%7d%7d%10.2f%8.3f\n", label, sum(rej), tp, fp,
+              tp/sum(truth), fp/max(sum(rej), 1)))
+}
+compare_all <- function(conf, seed) {
+  set.seed(seed)
+  s <- simulate_batches(confounding = conf)
+  bio <- model.matrix(~ factor(condition), data = s$meta)[, 2, drop = FALSE]
+  cat(sprintf("\n  --- confounding = %.1f;  cond x batch table = %s ---\n", conf,
+              paste(as.vector(table(s$meta$condition, s$meta$batch)), collapse = " ")))
+  cat(sprintf("  %-40s%7s%7s%7s%10s%8s\n", "analysis", "rej", "TP", "FP", "sens", "FDP"))
+  evaluate(de_test(s$Y, s$meta), s$truth, "no correction, no adjustment")
+  evaluate(de_test(combat_like(s$Y, s$meta$batch, NULL), s$meta), s$truth,
+           "matrix corrected WITHOUT the design")
+  evaluate(de_test(combat_like(s$Y, s$meta$batch, bio), s$meta), s$truth,
+           "matrix corrected WITH the design")
+  evaluate(de_adjusted(s$Y, s$meta), s$truth, "batch IN THE MODEL (19.4)")
+  s
+}
+invisible(compare_all(0, 1901))
+sim_c <- compare_all(0.6, 1911)
+cat("\n  Read the two blocks together:\n")
+cat("   * BALANCED: every strategy works. Removing batch means cannot touch\n")
+cat("     the condition effect because the two are ORTHOGONAL. This is the\n")
+cat("     strongest argument for balanced allocation at the design stage.\n")
+cat("   * CONFOUNDED: correcting WITHOUT the design strips out real biology.\n")
+cat("     Supplying the design, or adjusting in the model, protects it.\n")
+cat("\n  Look at the FDP column in the confounded block. Model-based adjustment\n")
+cat("  holds FDP near nominal while the corrected MATRIX overshoots: the\n")
+cat("  correction was ESTIMATED, and a corrected matrix discards that\n")
+cat("  uncertainty. Correct the matrix for VISUALISATION; adjust in the model\n")
+cat("  for INFERENCE.\n")
+
+#' ## 5. Surrogate variables when batch is unrecorded, eq. (19.5)
+
+#+ sva
+header("5. Estimating unrecorded batch as surrogate variables (19.5)")
+set.seed(1903)
+s2 <- simulate_batches()
+bio2 <- model.matrix(~ factor(condition), data = s2$meta)
+coef_bio <- qr.coef(qr(bio2), t(s2$Y))
+R <- t(s2$Y) - bio2 %*% coef_bio                                 # eq. (19.5)
+sv <- svd(R)
+SV <- sv$u[, 1, drop = FALSE]
+hidden <- as.numeric(s2$meta$batch == "b2")
+cat(sprintf("  |correlation(SV1, true hidden batch)| = %.4f\n", abs(cor(SV[,1], hidden))))
+cat(sprintf("  residual variance explained by SV1    = %.1f%%\n",
+            100 * sv$d[1]^2 / sum(sv$d^2)))
+de_with_sv <- function(Y, bio, svs) {
+  X <- cbind(1, bio, svs)
+  coef <- qr.coef(qr(X), t(Y))
+  resid <- t(Y) - X %*% coef
+  dof <- nrow(X) - ncol(X)
+  se <- sqrt((colSums(resid^2)/dof) * chol2inv(qr.R(qr(X)))[2, 2])
+  2 * pt(abs(coef[2, ]/se), dof, lower.tail = FALSE)
+}
+cat(sprintf("\n  %-40s%7s%7s%7s%10s%8s\n", "analysis", "rej", "TP", "FP", "sens", "FDP"))
+evaluate(de_test(s2$Y, s2$meta), s2$truth, "ignore the hidden batch")
+evaluate(de_with_sv(s2$Y, bio2[, 2], SV), s2$truth, "adjust for 1 surrogate variable")
+evaluate(de_adjusted(s2$Y, s2$meta), s2$truth, "adjust for the TRUE batch (oracle)")
+cat("\n  The surrogate variable recovers most of what knowing the true batch\n")
+cat("  would have given. RUV is the alternative, using NEGATIVE CONTROL\n")
+cat("  features (eq. 19.6) - valid only if those controls really are\n")
+cat("  unaffected by the biology, an assumption to defend.\n")
+
+#' ## 6. The two-sided diagnostic
+
+#+ two-sided
+header("6. Batch removal AND biology preservation")
+bio_c <- model.matrix(~ factor(condition), data = sim_c$meta)[, 2, drop = FALSE]
+knn_mixing <- function(Y, meta, k = 5) {
+  D <- as.matrix(dist(t(Y))); diag(D) <- Inf
+  b <- meta$batch
+  mean(sapply(seq_along(b), function(i) mean(b[order(D[i, ])[1:k]] != b[i])))
+}
+cat("  (using the PARTIALLY CONFOUNDED dataset, where the choice matters)\n")
+cat(sprintf("  %-40s%15s%14s%12s%14s\n", "matrix", "PC1 R^2 batch", "PC1 R^2 cond",
+            "kNN mixing", "true-DE sens"))
+for (row_ in list(list("uncorrected", sim_c$Y),
+                  list("corrected WITHOUT design", combat_like(sim_c$Y, sim_c$meta$batch, NULL)),
+                  list("corrected WITH design", combat_like(sim_c$Y, sim_c$meta$batch, bio_c)))) {
+  M <- row_[[2]]
+  pcm <- pc_metadata_table(M, sim_c$meta, n_pc = 1)$tab
+  q <- p.adjust(de_test(M, sim_c$meta), "BH")
+  cat(sprintf("  %-40s%15.3f%14.3f%12.3f%14.2f\n", row_[[1]],
+              pcm$batch[1], pcm$condition[1], knn_mixing(M, sim_c$meta),
+              sum(q < 0.05 & sim_c$truth)/sum(sim_c$truth)))
+}
+cat("\n  Read the columns against each other. The design-BLIND correction wins\n")
+cat("  on every 'batch removal' metric - PC1 batch R^2 of 0.000 and near-\n")
+cat("  perfect kNN mixing - and yet recovers ZERO true genes. It scored best\n")
+cat("  on the thing that is easy to measure while destroying the thing you\n")
+cat("  cared about. The design-aware correction leaves some batch structure\n")
+cat("  behind and keeps the biology.\n")
+cat("\n  That asymmetry is the whole lesson: a mixing metric ALONE rewards\n")
+cat("  overcorrection. Always report a biology-preservation metric beside it\n")
+cat("  (stats.md Topic 19).\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "batch_effects.png"), width = 1400, height = 430, res = 110)
+par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.5, 1))
+for (row_ in list(list("uncorrected (confounded)", sim_c$Y),
+                  list("corrected WITHOUT design", combat_like(sim_c$Y, sim_c$meta$batch, NULL)),
+                  list("corrected WITH design", combat_like(sim_c$Y, sim_c$meta$batch, bio_c)))) {
+  pcm <- pc_metadata_table(row_[[2]], sim_c$meta)
+  plot(pcm$scores[, 1], pcm$scores[, 2], asp = 1,
+       pch = c(16, 17)[factor(sim_c$meta$batch)],
+       col = c("steelblue", "firebrick")[factor(sim_c$meta$condition)], cex = 1.3,
+       xlab = sprintf("PC1 (%.0f%%)", 100*pcm$pve[1]),
+       ylab = sprintf("PC2 (%.0f%%)", 100*pcm$pve[2]), main = row_[[1]])
+}
+legend("topright", c("b1", "b2", "ctrl", "trt"), pch = c(16, 17, 15, 15),
+       col = c("black", "black", "steelblue", "firebrick"), bty = "n", cex = 0.6)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "batch_effects.png"), "\n")
+
+#' ## Decision rules (from `stats.md` Topic 19)
+#'
+#' 1. **Prevent**: randomise across batches, balance conditions within batch,
+#'    include bridging samples, record every processing variable.
+#' 2. **Diagnose before correcting.** If completely confounded, stop and say so.
+#' 3. Adjust in the model (19.4) for INFERENCE; correct the matrix (19.2) only
+#'    for VISUALISATION -- and keep it inside CV folds (Module 21).
+#' 4. Always evaluate BOTH batch removal and biology preservation.
+#'
+#' **Next:** `20_survival_and_longitudinal.R`
