@@ -10,68 +10,102 @@
 <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#fbfbf9; --fg:#1b1b19; --muted:#6c6c66; --line:#dcdcd5; --panel:#ffffff;
-  --foundations:#3f7d8c; --core:#3a5a83; --bioinformatics:#9a5f3c; --exercises:#5d7040;
+  --paper:#f4f1e8; --paper2:#efebe0; --fg:#22211d; --muted:#6a675e;
+  --line:#d6d0c0; --panel:#faf8f2;
+  --foundations:#2f6f7e; --core:#31527c; --bioinformatics:#8d5230; --exercises:#4f6435;
+  --grain:.055;
 }
-@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
-  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
-  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }}
 :root[data-theme="dark"]{
-  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
-  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }
+  --paper:#171714; --paper2:#131310; --fg:#e8e6df; --muted:#9a968b;
+  --line:#33322c; --panel:#1d1d19;
+  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e;
+  --grain:.05;
+}
 
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
-  background:var(--bg); color:var(--fg);
+  color:var(--fg);
+  background-color:var(--paper);
+  background-image:
+    radial-gradient(ellipse at 22% 8%, var(--panel) 0%, rgba(0,0,0,0) 55%),
+    linear-gradient(176deg, var(--paper) 0%, var(--paper2) 100%);
   font-family:'Ubuntu',system-ui,sans-serif; font-weight:400;
   line-height:1.55; -webkit-font-smoothing:antialiased;
+  min-height:100vh;
 }
-.wrap{max-width:1180px; margin:0 auto; padding:0 16px}
-header{padding:64px 0 28px}
-h1{font-size:clamp(28px,4.2vw,42px); font-weight:500; letter-spacing:-.02em; margin:0 0 14px}
-.lede{font-size:clamp(15px,1.7vw,17px); color:var(--muted); max-width:62ch; margin:0 0 6px; font-weight:300}
-.lede strong{color:var(--fg); font-weight:500}
-.meta{font-size:13.5px; color:var(--muted); margin-top:18px; font-weight:300}
-.meta a{color:inherit}
+/* Paper grain. A fixed overlay so it never tiles visibly while scrolling. */
+body::before{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='180'%20height='180'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.82'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3C/filter%3E%3Crect%20width='180'%20height='180'%20filter='url%28%23n%29'%20opacity='0.4'/%3E%3C/svg%3E");
+  opacity:var(--grain); mix-blend-mode:multiply;
+}
+:root[data-theme="dark"] body::before{ mix-blend-mode:screen }
+.wrap{position:relative; z-index:1; max-width:1860px; margin:0 auto;
+  padding:0 clamp(18px,2.6vw,44px)}
 
-.bar{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
-  padding:16px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:30px}
+header{padding:54px 0 22px}
+h1{font-size:clamp(28px,3.6vw,44px); font-weight:500; letter-spacing:-.022em; margin:0 0 16px}
+.lede{font-size:clamp(15px,1.28vw,19px); color:var(--muted); margin:0; font-weight:300;
+  max-width:none; text-wrap:balance}
+.lede strong{color:var(--fg); font-weight:500}
+.meta{font-size:13.5px; color:var(--muted); margin-top:16px; font-weight:300}
+.meta code{font-family:'Ubuntu Mono',monospace}
+
+.bar{display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center;
+  padding:15px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+  margin-top:26px}
 .key{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted);
   background:none; border:0; padding:0; cursor:pointer; font-family:inherit}
 .key:hover{color:var(--fg)}
-.key[aria-pressed="false"]{opacity:.38}
+.key[aria-pressed="false"]{opacity:.35}
 .dot{width:10px; height:10px; border-radius:2px; display:inline-block}
 .spacer{flex:1}
-.toggle{font-size:13px; color:var(--muted); display:inline-flex; gap:7px; align-items:center; cursor:pointer}
+.toggle{font-size:13px; color:var(--muted); display:inline-flex; gap:7px; align-items:center;
+  cursor:pointer}
 
-.stage{position:relative; margin:26px 0 8px; overflow-x:auto}
+/* Diagram on the left, explanation on the right. */
+.layout{display:grid; grid-template-columns:minmax(0,1fr) clamp(300px,23vw,400px);
+  gap:clamp(24px,2.4vw,46px); align-items:start; padding:24px 0 80px}
+.stage{position:relative; overflow-x:auto; min-width:0}
 svg{display:block; width:100%; height:auto}
-.node rect{fill:var(--panel); stroke:var(--line); stroke-width:1; rx:4; transition:stroke .12s, opacity .12s}
+
+.node rect{fill:var(--panel); stroke:var(--line); stroke-width:1; rx:4;
+  transition:stroke .12s, opacity .12s}
 .node text{font-size:12.5px; fill:var(--fg)}
 .node .k{font-family:'Ubuntu Mono',monospace; font-size:11.5px; fill:var(--muted)}
 .node{cursor:pointer}
 .node:hover rect{stroke:currentColor; stroke-width:1.8}
-.node .tick{width:3px}
 .edge{fill:none; stroke:var(--line); stroke-width:1}
 .edge.order{stroke-dasharray:2 4}
 .dim{opacity:.13}
 .on rect{stroke:currentColor; stroke-width:1.8}
 .edge.on{stroke:currentColor; stroke-width:1.7; stroke-dasharray:none; opacity:1}
-.colhead{font-size:11px; letter-spacing:.09em; text-transform:uppercase; fill:var(--muted); font-weight:500}
+.colhead{font-size:11px; letter-spacing:.09em; text-transform:uppercase; fill:var(--muted);
+  font-weight:500}
 
-.detail{border-top:1px solid var(--line); padding:20px 0 70px; min-height:132px}
-.detail h2{font-size:17px; font-weight:500; margin:0 0 3px}
-.detail .t{font-size:12.5px; color:var(--muted); font-family:'Ubuntu Mono',monospace; margin-bottom:10px}
-.detail p{margin:0 0 14px; max-width:70ch; color:var(--muted); font-weight:300}
-.detail .files{font-family:'Ubuntu Mono',monospace; font-size:12.5px; color:var(--muted); line-height:1.9}
-.detail .rel{display:flex; flex-wrap:wrap; gap:26px; margin-top:12px; font-size:13px}
-.detail .rel div{min-width:190px}
-.detail .rel b{font-weight:500; display:block; margin-bottom:3px; font-size:12px;
-  letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
-.detail .rel span{display:block; color:var(--muted); font-weight:300}
-.hint{color:var(--muted); font-weight:300; font-size:14px}
-@media (max-width:760px){ header{padding:40px 0 20px} .stage{overflow-x:scroll} }
+.detail{position:sticky; top:22px; border-left:1px solid var(--line);
+  padding:2px 0 0 clamp(18px,1.6vw,28px); min-height:220px}
+.detail h2{font-size:17.5px; font-weight:500; margin:0 0 4px; line-height:1.3}
+.detail .t{font-size:12.5px; color:var(--muted); font-family:'Ubuntu Mono',monospace;
+  margin-bottom:12px}
+.detail p{margin:0 0 16px; color:var(--muted); font-weight:300; font-size:14.5px}
+.detail .files{font-family:'Ubuntu Mono',monospace; font-size:12.5px; color:var(--muted);
+  line-height:1.9; word-break:break-all}
+.detail .rel{margin-top:16px; font-size:13px}
+.detail .rel > div{margin-bottom:14px}
+.detail .rel b{font-weight:500; display:block; margin-bottom:4px; font-size:11px;
+  letter-spacing:.07em; text-transform:uppercase; color:var(--muted)}
+.detail .rel span{display:block; color:var(--muted); font-weight:300; line-height:1.5}
+.hint{color:var(--muted); font-weight:300; font-size:14.5px}
+
+@media (max-width:1040px){
+  .layout{grid-template-columns:1fr; gap:26px}
+  .detail{position:static; border-left:0; border-top:1px solid var(--line);
+    padding:20px 0 0}
+  .lede{text-wrap:pretty}
+}
+@media (max-width:640px){ header{padding:34px 0 16px} }
 </style>
 </head>
 <body>
@@ -96,10 +130,11 @@ svg{display:block; width:100%; height:auto}
   <label class="toggle"><input type="checkbox" id="showOrder" checked> reading order</label>
 </div>
 
-<div class="stage"><svg id="g" role="img" aria-label="Dependency diagram of the 46 modules"></svg></div>
-
-<div class="detail" id="detail">
-  <p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>
+<div class="layout">
+  <div class="stage"><svg id="g" role="img" aria-label="Dependency diagram of the 46 modules"></svg></div>
+  <aside class="detail" id="detail">
+    <p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>
+  </aside>
 </div>
 
 </div>
@@ -129,7 +164,7 @@ const svg = document.getElementById("g");
 // to start left of zero or the foundations chain is clipped at the edge.
 const PAD = 38;
 svg.setAttribute("viewBox", `${-PAD} 0 ${W + PAD} ${H}`);
-svg.setAttribute("style", `min-width:${W + PAD}px`);
+svg.setAttribute("style", `min-width:${Math.round((W + PAD) * 0.82)}px`);
 
 function path(e) {
   const a = pos[e.from], b = pos[e.to];

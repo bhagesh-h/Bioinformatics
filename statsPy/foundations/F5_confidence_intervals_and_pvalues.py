@@ -157,9 +157,15 @@ print("""
 # %%
 header("4. Building a p-value from scratch, by simulation")
 
-# One experiment: 12 vs 12, with a real difference of 0.8 units.
-group_a = rng.normal(50.0, 2.0, 12)
-group_b = rng.normal(50.8, 2.0, 12)
+# One experiment with a real difference, big enough that the test should find
+# it. NPG and the shift are named so the permutation below cannot drift out of
+# step with the data.
+# A local generator, so this demonstration is the same every run and does not
+# depend on how many draws the sections above happened to consume.
+demo = np.random.default_rng(2)
+NPG, SHIFT = 14, 2.4
+group_a = demo.normal(50.0, 2.0, NPG)
+group_b = demo.normal(50.0 + SHIFT, 2.0, NPG)
 observed_diff = group_b.mean() - group_a.mean()
 
 # The null hypothesis says the labels are meaningless. So SHUFFLE them, and
@@ -168,8 +174,8 @@ observed_diff = group_b.mean() - group_a.mean()
 pooled = np.concatenate([group_a, group_b])
 null_diffs = np.empty(20_000)
 for i in range(20_000):
-    perm = rng.permutation(pooled)
-    null_diffs[i] = perm[12:].mean() - perm[:12].mean()
+    perm = demo.permutation(pooled)
+    null_diffs[i] = perm[NPG:].mean() - perm[:NPG].mean()
 
 p_perm = np.mean(np.abs(null_diffs) >= abs(observed_diff))
 

@@ -117,8 +117,14 @@ cat("
 
 ```{r pvalue}
 header("4. Building a p-value from scratch, by simulation")
-group_a <- rnorm(12, 50.0, 2)
-group_b <- rnorm(12, 50.8, 2)
+## NPG and the shift are named so the permutation below cannot drift out of
+## step with the data, and the effect is big enough that the test should find it.
+## A local seed, so this demonstration is the same every run and does not
+## depend on how many draws the sections above happened to consume.
+set.seed(14)
+NPG <- 14; SHIFT <- 2.4
+group_a <- rnorm(NPG, 50.0, 2)
+group_b <- rnorm(NPG, 50.0 + SHIFT, 2)
 observed_diff <- mean(group_b) - mean(group_a)
 ## The null hypothesis says the labels are meaningless. So SHUFFLE them and
 ## see how big a difference appears by chance alone. This is a permutation
@@ -126,7 +132,7 @@ observed_diff <- mean(group_b) - mean(group_a)
 pooled <- c(group_a, group_b)
 null_diffs <- replicate(20000, {
   perm <- sample(pooled)
-  mean(perm[13:24]) - mean(perm[1:12])
+  mean(perm[(NPG + 1):(2*NPG)]) - mean(perm[1:NPG])
 })
 p_perm <- mean(abs(null_diffs) >= abs(observed_diff))
 cat(sprintf("  observed difference between the groups : %+.4f\n", observed_diff))
