@@ -1,4 +1,4 @@
-# Statistics for Bioinformatics: a runnable curriculum
+# [Statistics for Bioinformatics](https://bhagesh-h.github.io/Bioinformatics/): a runnable curriculum
 
 A self-contained course in statistics for biological data, in **both R and
 Python**, where every claim is demonstrated by code you can run.
