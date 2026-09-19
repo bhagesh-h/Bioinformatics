@@ -33,6 +33,7 @@ each other. Open it locally, or publish it with GitHub Pages
 13. [Using real public data](#13-using-real-public-data)
 14. [The interactive diagram](#14-the-interactive-diagram)
 15. [Troubleshooting](#15-troubleshooting)
+16. [Licence](#16-licence)
 
 
 ## 1. What is in here
@@ -596,3 +597,31 @@ package set.
 
 **A number in the prose does not match my output**: you changed a seed or a
 parameter. The narration was written against the committed seeds.
+
+
+## 16. Licence
+
+This project is released under the **GNU General Public License, version 3**.
+The full text is in [`LICENSE`](LICENSE).
+
+    Statistics for Bioinformatics, a runnable statistics curriculum.
+    Copyright (C) 2026 Bhagesh Hunakunti
+
+    This program is free software: you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+    Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with this program. If not, see <https://www.gnu.org/licenses/>.
+
+In short: you may use, study, change and redistribute this material, including
+for teaching and for commercial work, provided that anything you distribute
+based on it carries the same licence and ships its source.
+
+SPDX identifier: `GPL-3.0-or-later`.
