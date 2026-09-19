@@ -1,0 +1,31 @@
+# Figures and output written by the modules at run time.
+results/
+*.png
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+# renv and RStudio project files. This project's R environment is defined by
+# env/r-packages.R and docker/Dockerfile.r, so the renv scaffolding that
+# RStudio creates is left on disk but kept out of the repository.
+statsR/renv/
+statsR/renv.lock
+statsR/.Rprofile
+statsR/*.Rproj
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

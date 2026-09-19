@@ -1,7 +1,7 @@
 # Statistics and Mathematics for Bioinformatics: A Formal Companion
 
 > **What this document is.** The sibling file
-> [`Statistics for Bioinformatics in R  A Decision-Centred Learning Curriculum.md`](Statistics%20for%20Bioinformatics%20in%20R%20%20A%20Decision-Centred%20Learning%20Curriculum.md)
+> [`CURRICULUM.md`](CURRICULUM.md)
 > tells you *which decision* to make. This document tells you *what the mathematics
 > underneath that decision actually says*: the estimator, its distribution, the
 > assumptions that make it valid, and the algebra that connects it to everything

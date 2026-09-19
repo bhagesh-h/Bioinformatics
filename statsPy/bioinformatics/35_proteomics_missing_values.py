@@ -183,12 +183,40 @@ for s in Yobs.columns[:6]:
           f"{smeta.loc[s,'plex']:>8}{smeta.loc[s,'run_order']:>11}")
 
 before = st.spearmanr(smeta["run_order"], Yobs.median(axis=0)).statistic
-after = st.spearmanr(smeta["run_order"], Ynorm.median(axis=0)).statistic
-print(f"\n  Spearman(run order, sample median): before {before:+.3f}, "
-      f"after {after:+.3f}")
-print("  Always plot intensity against INJECTION ORDER before and after. With")
-print("  pooled QC samples injected throughout the run, fit a LOESS curve per")
-print("  feature against run order and subtract it (the metabolomics standard).")
+print(f"\n  Spearman(run order, sample median) BEFORE: {before:+.3f}")
+print(f"  Spearman(run order, sample median) AFTER : undefined")
+print("""
+  That second line is not a bug, and it is worth understanding. Median
+  normalisation subtracts each column's median and adds one common constant,
+  so after it every sample median is IDENTICAL by construction. A correlation
+  against a constant has zero variance in one argument and is undefined.
+
+  The trap is to read that as "the drift is gone". It is not gone; this
+  particular diagnostic has simply been blinded to it. Median normalisation
+  removes a GLOBAL shift per sample. Drift that pushes different features by
+  different amounts survives untouched, and a per-feature check still sees
+  it:""")
+
+def drift_fraction(Y):
+    """Fraction of features whose intensity still tracks run order."""
+    ro = smeta["run_order"].to_numpy()
+    hits = 0
+    for _, row in Y.iterrows():
+        v = row.to_numpy(dtype=float)
+        ok = np.isfinite(v)
+        if ok.sum() < 8:
+            continue
+        if st.spearmanr(ro[ok], v[ok]).pvalue < 0.05:
+            hits += 1
+    return hits / len(Y)
+
+print(f"    features correlated with run order, before: {drift_fraction(Yobs):.1%}")
+print(f"    features correlated with run order, after : {drift_fraction(Ynorm):.1%}")
+print("""
+  Always plot intensity against INJECTION ORDER before and after, per feature
+  and not just per sample. With pooled QC samples injected throughout the run,
+  fit a LOESS curve per feature against run order and subtract it, which is
+  the metabolomics standard.""")
 
 # %% [markdown]
 # ## 4. Peptide -> protein summarisation, eq. (25.3)
@@ -504,7 +532,14 @@ print(f"\nFigure written to {OUT}/proteomics.png")
 
 
 # ---- SOLUTION (uncomment to check) -------------------------------------
-# P = impute_mixed(prot_mp, prot_mnar_like.reindex(prot_mp.index).fillna(False), seed=1)
+# # Impute at the PEPTIDE level and then summarise, which is the order this
+# # module argues for above. Imputing the protein matrix directly would
+# # barely change it, because a protein is only missing when all 4 of its
+# # peptides failed.
+# Ypep = Ynorm.dropna(how="all")
+# Yimp = impute_mixed(Ypep, pep_mnar_like.reindex(Ypep.index).fillna(False),
+#                     seed=1)
+# P = summarise_proteins(Yimp, pep_meta, "median_polish")
 # rows = []
 # for form, lab in [("y ~ C(condition)", "no plex term"),
 #                   ("y ~ C(condition) + C(plex)", "plex as a block")]:
@@ -575,15 +610,26 @@ print(f"\nFigure written to {OUT}/proteomics.png")
 # %% [markdown]
 # ### Problem 3: A protein seen in 3 of 18 samples
 #
-# Find proteins observed in fewer than 5 samples and inspect their test
-# results. Should they be reported as findings?
+# Every protein in this dataset has a value in all 18 samples, because a
+# protein survives summarisation if even one of its 4 peptides does. So the
+# question is not "is it missing?" but **how much measurement is behind each
+# number?** Count the peptide-level observations backing each protein (out of
+# 4 peptides x 18 samples = 72), bin the test results by that, and decide
+# where you would set a reporting threshold.
 
 # %%
 # ---- YOUR CODE HERE ----------------------------------------------------
 
 
 # ---- SOLUTION (uncomment to check) -------------------------------------
-# n_obs = prot_mp.notna().sum(axis=1)
+# # Depth of measurement behind each protein, out of 4 peptides x 18 samples.
+# depth = (Ynorm.notna().groupby(pep_meta["protein"].values).sum().sum(axis=1)
+#          .reindex(prot_mp.index))
+# print(f"  every protein has a value in all "
+#       f"{int(prot_mp.notna().sum(axis=1).max())} samples, but the peptide")
+# print(f"  evidence behind them ranges from {int(depth.min())} to "
+#       f"{int(depth.max())} observations out of 72.\n")
+#
 # P = impute_mnar(prot_mp, seed=3)
 # res = []
 # for p_ in P.index:
@@ -591,25 +637,34 @@ print(f"\nFigure written to {OUT}/proteomics.png")
 #     try:
 #         f = smf.ols("y ~ C(condition) + C(plex)", data=d).fit()
 #         key = [c for c in f.params.index if c.startswith("C(condition)")][0]
-#         res.append((p_, f.pvalues[key]))
+#         pv = f.pvalues[key]
+#         res.append((p_, pv if np.isfinite(pv) else 1.0))
 #     except Exception:
 #         res.append((p_, 1.0))
 # rr2 = pd.DataFrame(res, columns=["protein", "p"]).set_index("protein")
-# rr2["padj"] = st.false_discovery_control(rr2["p"].values)
-# rr2["n_obs"] = n_obs.reindex(rr2.index)
+# rr2["padj"] = st.false_discovery_control(rr2["p"].to_numpy())
+# rr2["depth"] = depth.reindex(rr2.index)
 # rr2["is_de"] = truth["is_de"].reindex(rr2.index)
-# print(f"  {'observed in':>13}{'proteins':>10}{'called':>9}{'of which TRUE':>16}")
-# for lo, hi in [(0, 4), (5, 9), (10, 14), (15, 18)]:
-#     m = (rr2["n_obs"] >= lo) & (rr2["n_obs"] <= hi)
-#     called = m & (rr2["padj"] < 0.05)
-#     print(f"  {f'{lo}-{hi} samples':>13}{int(m.sum()):>10}{int(called.sum()):>9}"
-#           f"{int((called & rr2['is_de']).sum()):>16}")
 #
-# # Proteins seen in a handful of samples generate "significant" calls whose
-# # effect is entirely determined by the imputation, not by measurement. Set a
-# # minimum-observation rule BEFORE testing (a common default is "observed in at
-# # least 70% of one condition") and report how many proteins it removed. A
-# # protein quantified in 3 of 18 samples is a QC finding, not a biological one.
+# print(f"  {'peptide obs':>13}{'proteins':>10}{'called':>9}{'of which TRUE':>16}"
+#       f"{'FDP':>8}")
+# for lo, hi in [(0, 35), (36, 50), (51, 65), (66, 72)]:
+#     m = (rr2["depth"] >= lo) & (rr2["depth"] <= hi)
+#     called = m & (rr2["padj"] < 0.05)
+#     tp = int((called & rr2["is_de"]).sum())
+#     print(f"  {f'{lo}-{hi}':>13}{int(m.sum()):>10}{int(called.sum()):>9}{tp:>16}"
+#           f"{(called.sum() - tp) / max(called.sum(), 1):>8.2f}")
+#
+# # Read the FDP column down the bins. Proteins backed by few peptide
+# # observations produce calls that are driven by the imputed values rather
+# # than by measurement, and their false discovery proportion is the worst of
+# # any bin. The protein matrix looks complete, which is exactly what makes
+# # this dangerous: the missingness has been hidden by summarisation.
+# #
+# # Set a minimum-evidence rule BEFORE testing - a common default is "at least
+# # 2 peptides quantified in at least 70% of one condition" - and report how
+# # many proteins it removed. A protein whose value rests on three peptide
+# # measurements is a QC finding, not a biological one.
 
 # %% [markdown]
 # ## What to take away

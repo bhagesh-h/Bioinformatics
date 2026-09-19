@@ -11,6 +11,10 @@ measures how wrong it is, then does it properly and measures that too.
 
 Nothing is installed on your machine. Everything runs in Docker.
 
+`docs/index.html` is a single page showing every module and how they depend on
+each other. Open it locally, or publish it with GitHub Pages
+([section 14](#14-the-interactive-diagram)).
+
 
 ## Table of contents
 
@@ -27,7 +31,8 @@ Nothing is installed on your machine. Everything runs in Docker.
 11. [Reproducing the environment](#11-reproducing-the-environment)
 12. [Conventions used throughout](#12-conventions-used-throughout)
 13. [Using real public data](#13-using-real-public-data)
-14. [Troubleshooting](#14-troubleshooting)
+14. [The interactive diagram](#14-the-interactive-diagram)
+15. [Troubleshooting](#15-troubleshooting)
 
 
 ## 1. What is in here
@@ -40,7 +45,8 @@ Nothing is installed on your machine. Everything runs in Docker.
 | `statsPy/bioinformatics/`, `statsR/bioinformatics/` | 11 modules each | Applied analyses: RNA-seq, single-cell, methylation, GWAS, proteomics, microbiome, spatial, survival, enrichment, networks |
 | `statsPy/exercises/`, `statsR/exercises/` | 4 exercises each | Integrative problem sets combining several topics, with full worked solutions |
 | `statsPy/notebooks/`, `statsR/notebooks/` | 46 each | Generated `.ipynb` / `.Rmd` views of every script |
-| `tools/` | 5 scripts | Test runners, solution checker, notebook builder |
+| `tools/` | 7 scripts | Test runners, solution checker, notebook builder, site builder, fast doc checks |
+| `docs/` | 1 page | A single-page map of all 46 modules and their dependencies, for GitHub Pages |
 | `env/`, `docker/` | - | Pinned environment manifests and Dockerfiles |
 
 The R and Python tracks are **parallel but not identical**. They cover the same
@@ -108,8 +114,7 @@ runr  statsR/core/08_multiple_testing.R
 .
 +-- README.md                      <- you are here
 +-- stats.md                       <- the mathematical companion (read alongside)
-+-- Statistics for Bioinformatics in R ... Curriculum.md
-|                                  <- the decision-centred syllabus this grew from
++-- CURRICULUM.md                  <- the decision-centred syllabus this grew from
 |
 +-- statsPy/                       -- PYTHON TRACK --------------------------
 |   +-- foundations/               6 beginner modules       (F1 ... F6)
@@ -140,7 +145,13 @@ runr  statsR/core/08_multiple_testing.R
 |   +-- run_r_tests.sh             run every R module, report PASS/FAIL
 |   +-- check_solutions.sh         run every module with its SOLUTIONS enabled
 |   +-- uncomment_solutions.py     helper used by check_solutions.sh
-|   \-- build_notebooks.sh         regenerate all notebooks from the scripts
+|   +-- build_notebooks.sh         regenerate all notebooks from the scripts
+|   +-- build_site.py              regenerate docs/index.html from the headers
+|   \-- check_docs.py              fast consistency checks, no Docker needed
+|
++-- docs/
+|   +-- index.html                 the module map (GitHub Pages entry point)
+|   \-- _template.html             its source, with the data injected
 |
 +-- data/
 |   +-- README.md                  where to get the REAL public dataset for
@@ -397,8 +408,19 @@ These runners execute each module **as a learner first sees it**, with the
 solutions still commented out. To execute the solutions as well, use
 `tools/check_solutions.sh` ([§7](#7-how-to-solve-the-problems)).
 
-A full run of everything takes roughly 25-40 minutes, most of it Docker
+A full run of everything takes roughly 40-70 minutes, most of it Docker
 start-up rather than computation.
+
+For a fast check that needs no Docker and no dependencies, run:
+
+```bash
+python3 tools/check_docs.py
+```
+
+It verifies that every Python module compiles, that every heading link,
+footnote and relative file link in the documentation resolves, and that
+`docs/index.html` is still in sync with the module headers. This is what runs
+in CI on every push; the Docker suites are too slow for that.
 
 
 ## 10. Building the notebooks
@@ -517,7 +539,39 @@ loading code, and what to look for in each.
 Keep both. Real data gives you the answer; a simulation with parameters
 matched to it tells you what that answer can and cannot support.
 
-## 14. Troubleshooting
+## 14. The interactive diagram
+
+`docs/index.html` is a single page showing all 46 modules as a dependency
+diagram: four columns for the four tracks, dashed edges for reading order,
+solid edges for declared dependencies. Point at a module to trace everything it
+needs and everything that needs it.
+
+Open it directly:
+
+```bash
+xdg-open docs/index.html      # or: open docs/index.html
+```
+
+It is a single static file with no build step and no network calls apart from
+the webfont, so it works from `file://`.
+
+To publish it, go to **Settings, Pages** in the repository and set the source
+to the `main` branch, `/docs` folder. GitHub then serves it at
+`https://<user>.github.io/<repo>/`.
+
+The page is generated from the module headers, exactly as the notebooks are, so
+it cannot drift from the code. After adding or renaming a module:
+
+```bash
+python3 tools/build_site.py
+```
+
+That reads the title, curriculum link, description and `Core modules used`
+line out of each `statsPy/**/*.py` header and rewrites `docs/index.html` from
+`docs/_template.html`. It uses only the standard library.
+
+
+## 15. Troubleshooting
 
 **`docker: permission denied`**: your user is not in the `docker` group. Use
 `sudo`, or add yourself: `sudo usermod -aG docker $USER` and log out and back

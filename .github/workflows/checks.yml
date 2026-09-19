@@ -1,0 +1,40 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fast:
+    name: docs and syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Standard library only, so there is nothing to install. The slow,
+      # authoritative checks are the Docker suites under tools/, which are
+      # too long to run on every push.
+      - name: Consistency checks
+        run: python3 tools/check_docs.py
+
+  r-syntax:
+    name: R parses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.2'
+      - name: Parse every R module
+        run: |
+          Rscript -e '
+            fs <- Sys.glob("statsR/*/*.R")
+            fs <- fs[!grepl("renv|notebooks", fs)]
+            bad <- fs[vapply(fs, function(f)
+              inherits(try(parse(f), silent = TRUE), "try-error"), logical(1))]
+            cat(length(fs) - length(bad), "of", length(fs), "R files parse\n")
+            if (length(bad)) { print(bad); quit(status = 1) }'

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statistics for Bioinformatics</title>
+<meta name="description" content="A runnable statistics curriculum for biological data, in R and Python. Every module is a script you can run.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfbf9; --fg:#1b1b19; --muted:#6c6c66; --line:#dcdcd5; --panel:#ffffff;
+  --foundations:#3f7d8c; --core:#3a5a83; --bioinformatics:#9a5f3c; --exercises:#5d7040;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
+  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }}
+:root[data-theme="dark"]{
+  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
+  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:'Ubuntu',system-ui,sans-serif; font-weight:400;
+  line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 16px}
+header{padding:64px 0 28px}
+h1{font-size:clamp(28px,4.2vw,42px); font-weight:500; letter-spacing:-.02em; margin:0 0 14px}
+.lede{font-size:clamp(15px,1.7vw,17px); color:var(--muted); max-width:62ch; margin:0 0 6px; font-weight:300}
+.lede strong{color:var(--fg); font-weight:500}
+.meta{font-size:13.5px; color:var(--muted); margin-top:18px; font-weight:300}
+.meta a{color:inherit}
+
+.bar{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
+  padding:16px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:30px}
+.key{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted);
+  background:none; border:0; padding:0; cursor:pointer; font-family:inherit}
+.key:hover{color:var(--fg)}
+.key[aria-pressed="false"]{opacity:.38}
+.dot{width:10px; height:10px; border-radius:2px; display:inline-block}
+.spacer{flex:1}
+.toggle{font-size:13px; color:var(--muted); display:inline-flex; gap:7px; align-items:center; cursor:pointer}
+
+.stage{position:relative; margin:26px 0 8px; overflow-x:auto}
+svg{display:block; width:100%; height:auto}
+.node rect{fill:var(--panel); stroke:var(--line); stroke-width:1; rx:4; transition:stroke .12s, opacity .12s}
+.node text{font-size:12.5px; fill:var(--fg)}
+.node .k{font-family:'Ubuntu Mono',monospace; font-size:11.5px; fill:var(--muted)}
+.node{cursor:pointer}
+.node:hover rect{stroke:currentColor; stroke-width:1.8}
+.node .tick{width:3px}
+.edge{fill:none; stroke:var(--line); stroke-width:1}
+.edge.order{stroke-dasharray:2 4}
+.dim{opacity:.13}
+.on rect{stroke:currentColor; stroke-width:1.8}
+.edge.on{stroke:currentColor; stroke-width:1.7; stroke-dasharray:none; opacity:1}
+.colhead{font-size:11px; letter-spacing:.09em; text-transform:uppercase; fill:var(--muted); font-weight:500}
+
+.detail{border-top:1px solid var(--line); padding:20px 0 70px; min-height:132px}
+.detail h2{font-size:17px; font-weight:500; margin:0 0 3px}
+.detail .t{font-size:12.5px; color:var(--muted); font-family:'Ubuntu Mono',monospace; margin-bottom:10px}
+.detail p{margin:0 0 14px; max-width:70ch; color:var(--muted); font-weight:300}
+.detail .files{font-family:'Ubuntu Mono',monospace; font-size:12.5px; color:var(--muted); line-height:1.9}
+.detail .rel{display:flex; flex-wrap:wrap; gap:26px; margin-top:12px; font-size:13px}
+.detail .rel div{min-width:190px}
+.detail .rel b{font-weight:500; display:block; margin-bottom:3px; font-size:12px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+.detail .rel span{display:block; color:var(--muted); font-weight:300}
+.hint{color:var(--muted); font-weight:300; font-size:14px}
+@media (max-width:760px){ header{padding:40px 0 20px} .stage{overflow-x:scroll} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Statistics for Bioinformatics</h1>
+  <p class="lede">A statistics curriculum for biological data in <strong>R and Python</strong>,
+     where every claim is demonstrated by a script you can run. Each module simulates data from
+     a known truth, does the wrong thing first, measures how wrong it is, then does it properly
+     and measures that too.</p>
+  <p class="meta">46 modules per language. Every node below exists twice, once as
+     <code>.py</code> and once as <code>.R</code>.</p>
+</header>
+
+<div class="bar" id="bar">
+  <button class="key" data-track="foundations" aria-pressed="true"><span class="dot" style="background:var(--foundations)"></span>Foundations</button>
+  <button class="key" data-track="core" aria-pressed="true"><span class="dot" style="background:var(--core)"></span>Core</button>
+  <button class="key" data-track="bioinformatics" aria-pressed="true"><span class="dot" style="background:var(--bioinformatics)"></span>Applied</button>
+  <button class="key" data-track="exercises" aria-pressed="true"><span class="dot" style="background:var(--exercises)"></span>Exercises</button>
+  <span class="spacer"></span>
+  <label class="toggle"><input type="checkbox" id="showOrder" checked> reading order</label>
+</div>
+
+<div class="stage"><svg id="g" role="img" aria-label="Dependency diagram of the 46 modules"></svg></div>
+
+<div class="detail" id="detail">
+  <p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>
+</div>
+
+</div>
+<script>
+const DATA = {"nodes":[{"key":"F1","id":"F1_variables_populations_samples","track":"foundations","order":0,"title":"Variables, populations, and samples","topic":"Part 0, \u00a70.1-\u00a70.3","desc":"You measure a few things. You want to say something about all the things."},{"key":"F2","id":"F2_probability_basics","track":"foundations","order":1,"title":"Probability, independence, and conditional probability","topic":"Part 0, \u00a70.4","desc":"Your sample could have come out otherwise. Probability is the mathematics of \"could have come out otherwise\", which is why it sits underneath every p-value, every confidence interval, and every error rate in this course."},{"key":"F3","id":"F3_distributions","track":"foundations","order":2,"title":"Distributions","topic":"Part 0, \u00a70.5, equation (0.10)","desc":"A distribution answers: which values does this variable take, and how often? The mean and standard deviation are two summaries of it."},{"key":"F4","id":"F4_estimates_and_standard_errors","track":"foundations","order":3,"title":"Estimates, standard errors, and the central limit theorem","topic":"Part 0, \u00a70.6","desc":"You computed an average from your data. How much should you trust it?"},{"key":"F5","id":"F5_confidence_intervals_and_pvalues","track":"foundations","order":4,"title":"Confidence intervals and p-values","topic":"Part 0, \u00a70.7-\u00a70.8","desc":"Confidence intervals and p-values are the two things every paper reports and the two things most often misread."},{"key":"F6","id":"F6_connecting_variables","track":"foundations","order":5,"title":"How statistics connects variables","topic":"Part 0, \u00a70.9, equation (0.16)","desc":"Most real questions are not \"what is the average?\" but \"does this relate to that?\" Does the drug change the marker; does expression predict survival."},{"key":"00","id":"00_setup_and_environment","track":"core","order":0,"title":"Setup, environment check, and house rules","topic":"Topic 35 (Reproducible statistical workflows)","desc":"Run this first. It verifies that every package the course uses is present and that the random-number machinery behaves deterministically."},{"key":"01","id":"01_study_design_and_estimands","track":"core","order":1,"title":"Statistical thinking: units, estimands, and pseudoreplication","topic":"Topic 1","desc":"Every other module assumes you know what n is. This one proves, by simulation, that getting it wrong is not a stylistic issue: it turns a 5% false-positive rate into a 60% false-positive rate."},{"key":"02","id":"02_data_structures_and_scales","track":"core","order":2,"title":"Data structures, measurement scales, and transformations","topic":"Topic 2","desc":"The assay triple and why the alignment contract (2.1) must be asserted, not assumed."},{"key":"03","id":"03_exploratory_data_analysis","track":"core","order":3,"title":"Exploratory data analysis and quality diagnostics","topic":"Topic 3","desc":"The ECDF and the DKW bound (3.1)-(3.2): how little small samples tell you."},{"key":"04","id":"04_probability_and_sampling","track":"core","order":4,"title":"Probability models and sampling distributions","topic":"Topic 4","desc":"Variance algebra (4.1)-(4.2), and why pairing is so powerful (4.3)."},{"key":"05","id":"05_estimation_and_intervals","track":"core","order":5,"title":"Estimation, effect sizes, and confidence intervals","topic":"Topic 5","desc":"Estimation, not dichotomised testing, is the primary scientific task."},{"key":"06","id":"06_hypothesis_tests_and_pvalues","track":"core","order":6,"title":"Hypothesis tests and p-values","topic":"Topic 6","desc":"What probability a p-value reports (6.1): and the three things it does not."},{"key":"07","id":"07_ttests_ranks_permutation","track":"core","order":7,"title":"t-tests, rank tests, and permutation tests","topic":"Topic 7","desc":"Pooled vs Welch (7.2)-(7.4), and why Welch should be your default."},{"key":"08","id":"08_multiple_testing","track":"core","order":8,"title":"Multiple testing and selective inference","topic":"Topic 8","desc":"FWER (8.1) vs FDR (8.2): different guarantees, different use cases."},{"key":"09","id":"09_power_and_sample_size","track":"core","order":9,"title":"Power, sample size, and design optimisation","topic":"Topic 9","desc":"Closed-form power (9.1)-(9.4) and Lehr's rule (9.3)."},{"key":"10","id":"10_correlation_and_dependence","track":"core","order":10,"title":"Correlation and dependence","topic":"Topic 10","desc":"Pearson (10.2) measures linear association only, and is not invariant to the log transforms omics uses everywhere."},{"key":"11","id":"11_linear_models","track":"core","order":11,"title":"Linear regression as the core framework","topic":"Topic 11","desc":"Almost every classical method in this course is with a different . Learn the algebra once."},{"key":"12","id":"12_anova_and_contrasts","track":"core","order":12,"title":"ANOVA, factorial designs, and contrasts","topic":"Topic 12","desc":"The sum-of-squares decomposition (12.1) is Pythagoras, and for two groups (12.2)."},{"key":"13","id":"13_generalized_linear_models","track":"core","order":13,"title":"Generalised linear models","topic":"Topic 13","desc":"The exponential family (13.1)-(13.2): mean and variance from one function."},{"key":"14","id":"14_mixed_models","track":"core","order":14,"title":"Mixed, multilevel, and repeated-measures models","topic":"Topic 14","desc":"This module is the formal machinery that fixes Module 01's pseudoreplication."},{"key":"15","id":"15_missing_data_and_censoring","track":"core","order":15,"title":"Missing data, censoring, and measurement limits","topic":"Topic 15","desc":"MCAR / MAR / MNAR (15.1)-(15.3) simulated side by side, so you can see which methods survive which mechanism."},{"key":"16","id":"16_matrix_algebra","track":"core","order":16,"title":"Matrix algebra for high-dimensional biology","topic":"Topic 16","desc":"Projection (16.2): and that simple regression, correlation and projection are one idea."},{"key":"17","id":"17_pca","track":"core","order":17,"title":"Principal component analysis","topic":"Topic 17","desc":"PCA is one eigenproblem (17.1), computed via SVD (17.2)-(17.3)."},{"key":"18","id":"18_distances_and_clustering","track":"core","order":18,"title":"Distances, clustering, and embeddings","topic":"Topic 18","desc":"Clustering always returns clusters. Which of them would survive a different distance, a different seed, or a different half of the data?"},{"key":"19","id":"19_batch_effects","track":"core","order":19,"title":"Batch effects and unwanted variation","topic":"Topic 19","desc":"The location-scale model (19.1) and a from-scratch ComBat-style correction (19.2): including why the biological design must be supplied."},{"key":"20","id":"20_survival_and_longitudinal","track":"core","order":20,"title":"Time-course, longitudinal, and survival data","topic":"Topic 28","desc":"Part A: trajectories: random slopes (28.1)-(28.2), the treatmentxtime interaction as the estimand, and separating between- from within-person effects (28.3)."},{"key":"21","id":"21_prediction_and_validation","track":"core","order":21,"title":"Statistical learning and biomarker prediction","topic":"Topic 31","desc":"Prediction is a different objective from association, with different validation standards."},{"key":"22","id":"22_causal_inference","track":"core","order":22,"title":"Causal inference for observational bioinformatics","topic":"Topic 32","desc":"Adjusting for more covariates feels safer. It is not."},{"key":"23","id":"23_bayesian_and_shrinkage","track":"core","order":23,"title":"Bayesian reasoning and hierarchical shrinkage","topic":"Topic 33","desc":"With 3 replicates per group and 20,000 genes, each gene alone is uninformative: but the ensemble is not."},{"key":"24","id":"24_diagnostics_and_reproducibility","track":"core","order":24,"title":"Diagnostics, sensitivity analysis, and reproducibility","topic":"Topics 34 and 35","desc":"Randomised quantile residuals (34.1): the one residual that works for discrete outcomes."},{"key":"30","id":"30_bulk_rnaseq_differential_expression","track":"bioinformatics","order":0,"title":"Bulk RNA-seq differential expression","topic":"Topic 20","desc":"Why simulated. Every number below is reproducible offline and we know the truth, so we can measure sensitivity and FDP rather than assert them."},{"key":"31","id":"31_single_cell_pseudobulk","track":"bioinformatics","order":1,"title":"Single-cell RNA-seq: replicated inference","topic":"Topic 21","desc":"Which genes change within a cell type between conditions, and which cell-type proportions change?"},{"key":"32","id":"32_cytometry_differential_abundance","track":"bioinformatics","order":2,"title":"Flow / mass cytometry: differential abundance and state","topic":"Topic 22","desc":"Differential abundance (DA): did a cluster change in size? -&gt; count model with a total-events offset (22.2)."},{"key":"33","id":"33_methylation_epigenomics","track":"bioinformatics","order":3,"title":"DNA methylation and epigenomics","topic":"Topic 23","desc":"Scale: model on M, report on beta (23.1)."},{"key":"34","id":"34_gwas_association","track":"bioinformatics","order":4,"title":"Genotypes, GWAS, and statistical genetics","topic":"Topic 24","desc":"Ancestry creates allele-frequency differences that correlate with phenotype. Uncorrected, this produces genome-wide false positives that look exactly like real associations."},{"key":"35","id":"35_proteomics_missing_values","track":"bioinformatics","order":5,"title":"Proteomics: missing values, batch structure, and inference","topic":"Topic 25","desc":"Missingness in proteomics is a mixture: abundance-dependent censoring (MNAR) plus stochastic identification failure (MAR)."},{"key":"36","id":"36_microbiome_compositional","track":"bioinformatics","order":6,"title":"Microbiome and compositional data","topic":"Topic 26","desc":"Because we simulate absolute abundances and then close them, we can answer the question real data cannot: which findings are biology and which are arithmetic?"},{"key":"37","id":"37_spatial_omics","track":"bioinformatics","order":7,"title":"Spatial transcriptomics and spatial omics","topic":"Topic 27","desc":"A section contains thousands of spots but is one observation of one patient. Spot-level p-values describe that section, not the condition."},{"key":"38","id":"38_survival_biomarkers","track":"bioinformatics","order":8,"title":"Survival analysis with molecular biomarkers","topic":"Topic 28","desc":"Is a gene prognostic, and would a risk score built from expression generalise to the next cohort?"},{"key":"39","id":"39_gene_set_enrichment","track":"bioinformatics","order":9,"title":"Functional enrichment and pathway statistics","topic":"Topic 29","desc":"Genes in a pathway are co-regulated, so they are not independent draws. The variance of a set-level statistic is inflated by the same design effect that clustered cells produce"},{"key":"40","id":"40_networks_and_multiomics","track":"bioinformatics","order":10,"title":"Networks and multi-omics integration","topic":"Topic 30","desc":"Unsupervised methods always return modules and factors. The question is never \"did I find structure?\": it is \"would this structure appear again?\""},{"key":"E1","id":"E1_design_audit","track":"exercises","order":0,"title":"Audit a confounded, pseudoreplicated experiment","topic":"Topics 1, 7, 9, 14, 19","desc":"A collaborator sends you this result and asks you to \"just check the stats\": On asking, you learn: Your job is to work out what, if anything, this experiment shows."},{"key":"E2","id":"E2_rnaseq_end_to_end","track":"exercises","order":1,"title":"A differential expression analysis, end to end","topic":"Topics 8, 13, 20, 29","desc":"You are handed a raw count matrix: 12 samples (6 control, 6 treated), 4,000 genes. Nobody tells you how it was made."},{"key":"E3","id":"E3_prediction_audit","track":"exercises","order":2,"title":"Audit a biomarker classifier","topic":"Topics 18, 21, 31","desc":"A group reports a 40-gene signature that predicts treatment response with AUC 0.94 in 200 patients."},{"key":"E4","id":"E4_causal_question","track":"exercises","order":3,"title":"Answer a causal question from observational data","topic":"Topics 11, 15, 32, 34","desc":"A registry contains 4,000 patients. Some received drug A; the rest did not."}],"edges":[{"from":"F1_variables_populations_samples","to":"F2_probability_basics","kind":"dep"},{"from":"F1_variables_populations_samples","to":"F3_distributions","kind":"dep"},{"from":"F2_probability_basics","to":"F3_distributions","kind":"dep"},{"from":"F1_variables_populations_samples","to":"F4_estimates_and_standard_errors","kind":"dep"},{"from":"F2_probability_basics","to":"F4_estimates_and_standard_errors","kind":"dep"},{"from":"F3_distributions","to":"F4_estimates_and_standard_errors","kind":"dep"},{"from":"F1_variables_populations_samples","to":"F5_confidence_intervals_and_pvalues","kind":"dep"},{"from":"F4_estimates_and_standard_errors","to":"F5_confidence_intervals_and_pvalues","kind":"dep"},{"from":"F1_variables_populations_samples","to":"F6_connecting_variables","kind":"dep"},{"from":"F5_confidence_intervals_and_pvalues","to":"F6_connecting_variables","kind":"dep"},{"from":"04_probability_and_sampling","to":"30_bulk_rnaseq_differential_expression","kind":"dep"},{"from":"08_multiple_testing","to":"30_bulk_rnaseq_differential_expression","kind":"dep"},{"from":"13_generalized_linear_models","to":"30_bulk_rnaseq_differential_expression","kind":"dep"},{"from":"19_batch_effects","to":"30_bulk_rnaseq_differential_expression","kind":"dep"},{"from":"23_bayesian_and_shrinkage","to":"30_bulk_rnaseq_differential_expression","kind":"dep"},{"from":"01_study_design_and_estimands","to":"31_single_cell_pseudobulk","kind":"dep"},{"from":"14_mixed_models","to":"31_single_cell_pseudobulk","kind":"dep"},{"from":"18_distances_and_clustering","to":"31_single_cell_pseudobulk","kind":"dep"},{"from":"36_microbiome_compositional","to":"31_single_cell_pseudobulk","kind":"dep"},{"from":"01_study_design_and_estimands","to":"32_cytometry_differential_abundance","kind":"dep"},{"from":"02_data_structures_and_scales","to":"32_cytometry_differential_abundance","kind":"dep"},{"from":"13_generalized_linear_models","to":"32_cytometry_differential_abundance","kind":"dep"},{"from":"18_distances_and_clustering","to":"32_cytometry_differential_abundance","kind":"dep"},{"from":"23_bayesian_and_shrinkage","to":"32_cytometry_differential_abundance","kind":"dep"},{"from":"02_data_structures_and_scales","to":"33_methylation_epigenomics","kind":"dep"},{"from":"13_generalized_linear_models","to":"33_methylation_epigenomics","kind":"dep"},{"from":"22_causal_inference","to":"33_methylation_epigenomics","kind":"dep"},{"from":"23_bayesian_and_shrinkage","to":"33_methylation_epigenomics","kind":"dep"},{"from":"08_multiple_testing","to":"34_gwas_association","kind":"dep"},{"from":"13_generalized_linear_models","to":"34_gwas_association","kind":"dep"},{"from":"17_pca","to":"34_gwas_association","kind":"dep"},{"from":"21_prediction_and_validation","to":"34_gwas_association","kind":"dep"},{"from":"22_causal_inference","to":"34_gwas_association","kind":"dep"},{"from":"02_data_structures_and_scales","to":"35_proteomics_missing_values","kind":"dep"},{"from":"05_estimation_and_intervals","to":"35_proteomics_missing_values","kind":"dep"},{"from":"15_missing_data_and_censoring","to":"35_proteomics_missing_values","kind":"dep"},{"from":"19_batch_effects","to":"35_proteomics_missing_values","kind":"dep"},{"from":"23_bayesian_and_shrinkage","to":"35_proteomics_missing_values","kind":"dep"},{"from":"02_data_structures_and_scales","to":"36_microbiome_compositional","kind":"dep"},{"from":"10_correlation_and_dependence","to":"36_microbiome_compositional","kind":"dep"},{"from":"18_distances_and_clustering","to":"36_microbiome_compositional","kind":"dep"},{"from":"01_study_design_and_estimands","to":"37_spatial_omics","kind":"dep"},{"from":"13_generalized_linear_models","to":"37_spatial_omics","kind":"dep"},{"from":"14_mixed_models","to":"37_spatial_omics","kind":"dep"},{"from":"20_survival_and_longitudinal","to":"38_survival_biomarkers","kind":"dep"},{"from":"21_prediction_and_validation","to":"38_survival_biomarkers","kind":"dep"},{"from":"22_causal_inference","to":"38_survival_biomarkers","kind":"dep"},{"from":"08_multiple_testing","to":"38_survival_biomarkers","kind":"dep"},{"from":"01_study_design_and_estimands","to":"39_gene_set_enrichment","kind":"dep"},{"from":"08_multiple_testing","to":"39_gene_set_enrichment","kind":"dep"},{"from":"30_bulk_rnaseq_differential_expression","to":"39_gene_set_enrichment","kind":"dep"},{"from":"10_correlation_and_dependence","to":"40_networks_and_multiomics","kind":"dep"},{"from":"16_matrix_algebra","to":"40_networks_and_multiomics","kind":"dep"},{"from":"17_pca","to":"40_networks_and_multiomics","kind":"dep"},{"from":"19_batch_effects","to":"40_networks_and_multiomics","kind":"dep"},{"from":"21_prediction_and_validation","to":"40_networks_and_multiomics","kind":"dep"},{"from":"01_study_design_and_estimands","to":"E1_design_audit","kind":"dep"},{"from":"07_ttests_ranks_permutation","to":"E1_design_audit","kind":"dep"},{"from":"09_power_and_sample_size","to":"E1_design_audit","kind":"dep"},{"from":"14_mixed_models","to":"E1_design_audit","kind":"dep"},{"from":"19_batch_effects","to":"E1_design_audit","kind":"dep"},{"from":"08_multiple_testing","to":"E2_rnaseq_end_to_end","kind":"dep"},{"from":"13_generalized_linear_models","to":"E2_rnaseq_end_to_end","kind":"dep"},{"from":"20_survival_and_longitudinal","to":"E2_rnaseq_end_to_end","kind":"dep"},{"from":"30_bulk_rnaseq_differential_expression","to":"E2_rnaseq_end_to_end","kind":"dep"},{"from":"39_gene_set_enrichment","to":"E2_rnaseq_end_to_end","kind":"dep"},{"from":"18_distances_and_clustering","to":"E3_prediction_audit","kind":"dep"},{"from":"21_prediction_and_validation","to":"E3_prediction_audit","kind":"dep"},{"from":"31_single_cell_pseudobulk","to":"E3_prediction_audit","kind":"dep"},{"from":"38_survival_biomarkers","to":"E3_prediction_audit","kind":"dep"},{"from":"11_linear_models","to":"E4_causal_question","kind":"dep"},{"from":"22_causal_inference","to":"E4_causal_question","kind":"dep"},{"from":"24_diagnostics_and_reproducibility","to":"E4_causal_question","kind":"dep"},{"from":"38_survival_biomarkers","to":"E4_causal_question","kind":"dep"},{"from":"F1_variables_populations_samples","to":"F2_probability_basics","kind":"order"},{"from":"F2_probability_basics","to":"F3_distributions","kind":"order"},{"from":"F3_distributions","to":"F4_estimates_and_standard_errors","kind":"order"},{"from":"F4_estimates_and_standard_errors","to":"F5_confidence_intervals_and_pvalues","kind":"order"},{"from":"F5_confidence_intervals_and_pvalues","to":"F6_connecting_variables","kind":"order"},{"from":"00_setup_and_environment","to":"01_study_design_and_estimands","kind":"order"},{"from":"01_study_design_and_estimands","to":"02_data_structures_and_scales","kind":"order"},{"from":"02_data_structures_and_scales","to":"03_exploratory_data_analysis","kind":"order"},{"from":"03_exploratory_data_analysis","to":"04_probability_and_sampling","kind":"order"},{"from":"04_probability_and_sampling","to":"05_estimation_and_intervals","kind":"order"},{"from":"05_estimation_and_intervals","to":"06_hypothesis_tests_and_pvalues","kind":"order"},{"from":"06_hypothesis_tests_and_pvalues","to":"07_ttests_ranks_permutation","kind":"order"},{"from":"07_ttests_ranks_permutation","to":"08_multiple_testing","kind":"order"},{"from":"08_multiple_testing","to":"09_power_and_sample_size","kind":"order"},{"from":"09_power_and_sample_size","to":"10_correlation_and_dependence","kind":"order"},{"from":"10_correlation_and_dependence","to":"11_linear_models","kind":"order"},{"from":"11_linear_models","to":"12_anova_and_contrasts","kind":"order"},{"from":"12_anova_and_contrasts","to":"13_generalized_linear_models","kind":"order"},{"from":"13_generalized_linear_models","to":"14_mixed_models","kind":"order"},{"from":"14_mixed_models","to":"15_missing_data_and_censoring","kind":"order"},{"from":"15_missing_data_and_censoring","to":"16_matrix_algebra","kind":"order"},{"from":"16_matrix_algebra","to":"17_pca","kind":"order"},{"from":"17_pca","to":"18_distances_and_clustering","kind":"order"},{"from":"18_distances_and_clustering","to":"19_batch_effects","kind":"order"},{"from":"19_batch_effects","to":"20_survival_and_longitudinal","kind":"order"},{"from":"20_survival_and_longitudinal","to":"21_prediction_and_validation","kind":"order"},{"from":"21_prediction_and_validation","to":"22_causal_inference","kind":"order"},{"from":"22_causal_inference","to":"23_bayesian_and_shrinkage","kind":"order"},{"from":"23_bayesian_and_shrinkage","to":"24_diagnostics_and_reproducibility","kind":"order"},{"from":"30_bulk_rnaseq_differential_expression","to":"31_single_cell_pseudobulk","kind":"order"},{"from":"31_single_cell_pseudobulk","to":"32_cytometry_differential_abundance","kind":"order"},{"from":"32_cytometry_differential_abundance","to":"33_methylation_epigenomics","kind":"order"},{"from":"33_methylation_epigenomics","to":"34_gwas_association","kind":"order"},{"from":"34_gwas_association","to":"35_proteomics_missing_values","kind":"order"},{"from":"35_proteomics_missing_values","to":"36_microbiome_compositional","kind":"order"},{"from":"36_microbiome_compositional","to":"37_spatial_omics","kind":"order"},{"from":"37_spatial_omics","to":"38_survival_biomarkers","kind":"order"},{"from":"38_survival_biomarkers","to":"39_gene_set_enrichment","kind":"order"},{"from":"39_gene_set_enrichment","to":"40_networks_and_multiomics","kind":"order"},{"from":"E1_design_audit","to":"E2_rnaseq_end_to_end","kind":"order"},{"from":"E2_rnaseq_end_to_end","to":"E3_prediction_audit","kind":"order"},{"from":"E3_prediction_audit","to":"E4_causal_question","kind":"order"},{"from":"F6_connecting_variables","to":"01_study_design_and_estimands","kind":"order"},{"from":"24_diagnostics_and_reproducibility","to":"30_bulk_rnaseq_differential_expression","kind":"order"}]};
+const TRACKS = ["foundations","core","bioinformatics","exercises"];
+const LABEL  = {foundations:"Foundations", core:"Core", bioinformatics:"Applied", exercises:"Exercises"};
+const NW = 244, NH = 30, GAPY = 8, COLGAP = 46, TOP = 34;
+
+const byId = Object.fromEntries(DATA.nodes.map(n => [n.id, n]));
+const up = {}, down = {};
+DATA.nodes.forEach(n => { up[n.id] = []; down[n.id] = []; });
+DATA.edges.filter(e => e.kind === "dep").forEach(e => {
+  up[e.to].push(e.from); down[e.from].push(e.to);
+});
+
+const cols = TRACKS.map(t => DATA.nodes.filter(n => n.track === t));
+const pos = {};
+cols.forEach((col, ci) => col.forEach((n, ri) => {
+  pos[n.id] = { x: ci * (NW + COLGAP), y: TOP + ri * (NH + GAPY) };
+}));
+const W = TRACKS.length * NW + (TRACKS.length - 1) * COLGAP;
+const H = TOP + Math.max(...cols.map(c => c.length)) * (NH + GAPY) + 10;
+
+const svg = document.getElementById("g");
+// Same-column edges bow out to the LEFT of their column, so the viewBox has
+// to start left of zero or the foundations chain is clipped at the edge.
+const PAD = 38;
+svg.setAttribute("viewBox", `${-PAD} 0 ${W + PAD} ${H}`);
+svg.setAttribute("style", `min-width:${W + PAD}px`);
+
+function path(e) {
+  const a = pos[e.from], b = pos[e.to];
+  const ax = a.x + NW, ay = a.y + NH / 2, bx = b.x, by = b.y + NH / 2;
+  if (byId[e.from].track === byId[e.to].track) {          // same column: arc on the left
+    const x = a.x, dy = Math.abs(by - ay), bow = Math.min(30, 12 + dy * 0.22);
+    return `M${x} ${ay} C${x - bow} ${ay}, ${x - bow} ${by}, ${x} ${by}`;
+  }
+  const mx = (ax + bx) / 2;
+  return `M${ax} ${ay} C${mx} ${ay}, ${mx} ${by}, ${bx} ${by}`;
+}
+
+let svgHTML = "";
+TRACKS.forEach((t, ci) => {
+  svgHTML += `<text class="colhead" x="${ci * (NW + COLGAP)}" y="14">${LABEL[t]}</text>`;
+});
+DATA.edges.forEach((e, i) => {
+  svgHTML += `<path class="edge ${e.kind}" id="e${i}" d="${path(e)}"
+               data-from="${e.from}" data-to="${e.to}"></path>`;
+});
+DATA.nodes.forEach(n => {
+  const p = pos[n.id];
+  const t = n.title.length > 30 ? n.title.slice(0, 29) + "..." : n.title;
+  svgHTML += `<g class="node" id="n-${n.id}" data-id="${n.id}" tabindex="0"
+       style="color:var(--${n.track})" transform="translate(${p.x},${p.y})">
+     <rect width="${NW}" height="${NH}"></rect>
+     <rect class="tick" width="3" height="${NH}" fill="currentColor" stroke="none"></rect>
+     <text class="k" x="14" y="${NH / 2 + 4}">${n.key}</text>
+     <text x="46" y="${NH / 2 + 4}">${t}</text>
+   </g>`;
+});
+svg.innerHTML = svgHTML;
+
+const detail = document.getElementById("detail");
+let pinned = null;
+
+function clearMarks() {
+  svg.querySelectorAll(".node,.edge").forEach(el => el.classList.remove("on", "dim"));
+}
+function related(id) {
+  const seen = new Set([id]);
+  (function walk(i, dir) { dir[i].forEach(j => { if (!seen.has(j)) { seen.add(j); walk(j, dir); } }); })(id, up);
+  (function walk(i, dir) { dir[i].forEach(j => { if (!seen.has(j)) { seen.add(j); walk(j, dir); } }); })(id, down);
+  return seen;
+}
+function highlight(id) {
+  clearMarks();
+  const keep = related(id);
+  svg.querySelectorAll(".node").forEach(el => {
+    el.classList.toggle("dim", !keep.has(el.dataset.id));
+    el.classList.toggle("on", el.dataset.id === id);
+  });
+  svg.querySelectorAll(".edge").forEach(el => {
+    const live = keep.has(el.dataset.from) && keep.has(el.dataset.to);
+    el.classList.toggle("dim", !live);
+    el.classList.toggle("on", live && el.classList.contains("dep"));
+  });
+  show(id);
+}
+function names(ids) {
+  return ids.length
+    ? ids.map(i => `<span>${byId[i].key} &nbsp;${byId[i].title}</span>`).join("")
+    : `<span>none</span>`;
+}
+function show(id) {
+  const n = byId[id];
+  const dir = n.track;
+  detail.innerHTML =
+    `<h2>${n.key} &nbsp;${n.title}</h2>
+     <div class="t">${n.topic}</div>
+     <p>${n.desc || ""}</p>
+     <div class="files">statsPy/${dir}/${n.id}.py<br>statsR/${dir}/${n.id}.R</div>
+     <div class="rel">
+       <div><b>Needs</b>${names(up[id])}</div>
+       <div><b>Needed by</b>${names(down[id])}</div>
+     </div>`;
+}
+svg.querySelectorAll(".node").forEach(el => {
+  const id = el.dataset.id;
+  el.addEventListener("mouseenter", () => { if (!pinned) highlight(id); });
+  el.addEventListener("focus",      () => { if (!pinned) highlight(id); });
+  el.addEventListener("click", () => {
+    pinned = pinned === id ? null : id;
+    pinned ? highlight(id) : reset();
+  });
+  el.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); el.click(); } });
+});
+document.querySelector(".stage").addEventListener("mouseleave", () => { if (!pinned) reset(); });
+function reset() {
+  clearMarks();
+  detail.innerHTML = `<p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>`;
+  applyFilters();
+}
+document.getElementById("showOrder").addEventListener("change", e => {
+  svg.querySelectorAll(".edge.order").forEach(p => p.style.display = e.target.checked ? "" : "none");
+});
+const off = new Set();
+document.querySelectorAll(".key").forEach(b => b.addEventListener("click", () => {
+  const t = b.dataset.track;
+  off.has(t) ? off.delete(t) : off.add(t);
+  b.setAttribute("aria-pressed", String(!off.has(t)));
+  pinned = null; clearMarks(); applyFilters();
+}));
+function applyFilters() {
+  svg.querySelectorAll(".node").forEach(el => {
+    el.style.display = off.has(byId[el.dataset.id].track) ? "none" : "";
+  });
+  svg.querySelectorAll(".edge").forEach(el => {
+    const hide = off.has(byId[el.dataset.from].track) || off.has(byId[el.dataset.to].track);
+    el.style.display = hide ? "none" : "";
+  });
+}
+</script>
+</body>
+</html>

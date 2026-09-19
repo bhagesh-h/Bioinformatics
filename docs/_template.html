@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statistics for Bioinformatics</title>
+<meta name="description" content="A runnable statistics curriculum for biological data, in R and Python. Every module is a script you can run.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfbf9; --fg:#1b1b19; --muted:#6c6c66; --line:#dcdcd5; --panel:#ffffff;
+  --foundations:#3f7d8c; --core:#3a5a83; --bioinformatics:#9a5f3c; --exercises:#5d7040;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
+  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }}
+:root[data-theme="dark"]{
+  --bg:#121311; --fg:#e9e9e4; --muted:#9a9a92; --line:#2e302c; --panel:#191a17;
+  --foundations:#6fb3c4; --core:#7aa3d8; --bioinformatics:#d59468; --exercises:#9dbd6e; }
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:'Ubuntu',system-ui,sans-serif; font-weight:400;
+  line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 16px}
+header{padding:64px 0 28px}
+h1{font-size:clamp(28px,4.2vw,42px); font-weight:500; letter-spacing:-.02em; margin:0 0 14px}
+.lede{font-size:clamp(15px,1.7vw,17px); color:var(--muted); max-width:62ch; margin:0 0 6px; font-weight:300}
+.lede strong{color:var(--fg); font-weight:500}
+.meta{font-size:13.5px; color:var(--muted); margin-top:18px; font-weight:300}
+.meta a{color:inherit}
+
+.bar{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
+  padding:16px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:30px}
+.key{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted);
+  background:none; border:0; padding:0; cursor:pointer; font-family:inherit}
+.key:hover{color:var(--fg)}
+.key[aria-pressed="false"]{opacity:.38}
+.dot{width:10px; height:10px; border-radius:2px; display:inline-block}
+.spacer{flex:1}
+.toggle{font-size:13px; color:var(--muted); display:inline-flex; gap:7px; align-items:center; cursor:pointer}
+
+.stage{position:relative; margin:26px 0 8px; overflow-x:auto}
+svg{display:block; width:100%; height:auto}
+.node rect{fill:var(--panel); stroke:var(--line); stroke-width:1; rx:4; transition:stroke .12s, opacity .12s}
+.node text{font-size:12.5px; fill:var(--fg)}
+.node .k{font-family:'Ubuntu Mono',monospace; font-size:11.5px; fill:var(--muted)}
+.node{cursor:pointer}
+.node:hover rect{stroke:currentColor; stroke-width:1.8}
+.node .tick{width:3px}
+.edge{fill:none; stroke:var(--line); stroke-width:1}
+.edge.order{stroke-dasharray:2 4}
+.dim{opacity:.13}
+.on rect{stroke:currentColor; stroke-width:1.8}
+.edge.on{stroke:currentColor; stroke-width:1.7; stroke-dasharray:none; opacity:1}
+.colhead{font-size:11px; letter-spacing:.09em; text-transform:uppercase; fill:var(--muted); font-weight:500}
+
+.detail{border-top:1px solid var(--line); padding:20px 0 70px; min-height:132px}
+.detail h2{font-size:17px; font-weight:500; margin:0 0 3px}
+.detail .t{font-size:12.5px; color:var(--muted); font-family:'Ubuntu Mono',monospace; margin-bottom:10px}
+.detail p{margin:0 0 14px; max-width:70ch; color:var(--muted); font-weight:300}
+.detail .files{font-family:'Ubuntu Mono',monospace; font-size:12.5px; color:var(--muted); line-height:1.9}
+.detail .rel{display:flex; flex-wrap:wrap; gap:26px; margin-top:12px; font-size:13px}
+.detail .rel div{min-width:190px}
+.detail .rel b{font-weight:500; display:block; margin-bottom:3px; font-size:12px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+.detail .rel span{display:block; color:var(--muted); font-weight:300}
+.hint{color:var(--muted); font-weight:300; font-size:14px}
+@media (max-width:760px){ header{padding:40px 0 20px} .stage{overflow-x:scroll} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Statistics for Bioinformatics</h1>
+  <p class="lede">A statistics curriculum for biological data in <strong>R and Python</strong>,
+     where every claim is demonstrated by a script you can run. Each module simulates data from
+     a known truth, does the wrong thing first, measures how wrong it is, then does it properly
+     and measures that too.</p>
+  <p class="meta">46 modules per language. Every node below exists twice, once as
+     <code>.py</code> and once as <code>.R</code>.</p>
+</header>
+
+<div class="bar" id="bar">
+  <button class="key" data-track="foundations" aria-pressed="true"><span class="dot" style="background:var(--foundations)"></span>Foundations</button>
+  <button class="key" data-track="core" aria-pressed="true"><span class="dot" style="background:var(--core)"></span>Core</button>
+  <button class="key" data-track="bioinformatics" aria-pressed="true"><span class="dot" style="background:var(--bioinformatics)"></span>Applied</button>
+  <button class="key" data-track="exercises" aria-pressed="true"><span class="dot" style="background:var(--exercises)"></span>Exercises</button>
+  <span class="spacer"></span>
+  <label class="toggle"><input type="checkbox" id="showOrder" checked> reading order</label>
+</div>
+
+<div class="stage"><svg id="g" role="img" aria-label="Dependency diagram of the 46 modules"></svg></div>
+
+<div class="detail" id="detail">
+  <p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>
+</div>
+
+</div>
+<script>
+const DATA = __DATA__;
+const TRACKS = ["foundations","core","bioinformatics","exercises"];
+const LABEL  = {foundations:"Foundations", core:"Core", bioinformatics:"Applied", exercises:"Exercises"};
+const NW = 244, NH = 30, GAPY = 8, COLGAP = 46, TOP = 34;
+
+const byId = Object.fromEntries(DATA.nodes.map(n => [n.id, n]));
+const up = {}, down = {};
+DATA.nodes.forEach(n => { up[n.id] = []; down[n.id] = []; });
+DATA.edges.filter(e => e.kind === "dep").forEach(e => {
+  up[e.to].push(e.from); down[e.from].push(e.to);
+});
+
+const cols = TRACKS.map(t => DATA.nodes.filter(n => n.track === t));
+const pos = {};
+cols.forEach((col, ci) => col.forEach((n, ri) => {
+  pos[n.id] = { x: ci * (NW + COLGAP), y: TOP + ri * (NH + GAPY) };
+}));
+const W = TRACKS.length * NW + (TRACKS.length - 1) * COLGAP;
+const H = TOP + Math.max(...cols.map(c => c.length)) * (NH + GAPY) + 10;
+
+const svg = document.getElementById("g");
+// Same-column edges bow out to the LEFT of their column, so the viewBox has
+// to start left of zero or the foundations chain is clipped at the edge.
+const PAD = 38;
+svg.setAttribute("viewBox", `${-PAD} 0 ${W + PAD} ${H}`);
+svg.setAttribute("style", `min-width:${W + PAD}px`);
+
+function path(e) {
+  const a = pos[e.from], b = pos[e.to];
+  const ax = a.x + NW, ay = a.y + NH / 2, bx = b.x, by = b.y + NH / 2;
+  if (byId[e.from].track === byId[e.to].track) {          // same column: arc on the left
+    const x = a.x, dy = Math.abs(by - ay), bow = Math.min(30, 12 + dy * 0.22);
+    return `M${x} ${ay} C${x - bow} ${ay}, ${x - bow} ${by}, ${x} ${by}`;
+  }
+  const mx = (ax + bx) / 2;
+  return `M${ax} ${ay} C${mx} ${ay}, ${mx} ${by}, ${bx} ${by}`;
+}
+
+let svgHTML = "";
+TRACKS.forEach((t, ci) => {
+  svgHTML += `<text class="colhead" x="${ci * (NW + COLGAP)}" y="14">${LABEL[t]}</text>`;
+});
+DATA.edges.forEach((e, i) => {
+  svgHTML += `<path class="edge ${e.kind}" id="e${i}" d="${path(e)}"
+               data-from="${e.from}" data-to="${e.to}"></path>`;
+});
+DATA.nodes.forEach(n => {
+  const p = pos[n.id];
+  const t = n.title.length > 30 ? n.title.slice(0, 29) + "..." : n.title;
+  svgHTML += `<g class="node" id="n-${n.id}" data-id="${n.id}" tabindex="0"
+       style="color:var(--${n.track})" transform="translate(${p.x},${p.y})">
+     <rect width="${NW}" height="${NH}"></rect>
+     <rect class="tick" width="3" height="${NH}" fill="currentColor" stroke="none"></rect>
+     <text class="k" x="14" y="${NH / 2 + 4}">${n.key}</text>
+     <text x="46" y="${NH / 2 + 4}">${t}</text>
+   </g>`;
+});
+svg.innerHTML = svgHTML;
+
+const detail = document.getElementById("detail");
+let pinned = null;
+
+function clearMarks() {
+  svg.querySelectorAll(".node,.edge").forEach(el => el.classList.remove("on", "dim"));
+}
+function related(id) {
+  const seen = new Set([id]);
+  (function walk(i, dir) { dir[i].forEach(j => { if (!seen.has(j)) { seen.add(j); walk(j, dir); } }); })(id, up);
+  (function walk(i, dir) { dir[i].forEach(j => { if (!seen.has(j)) { seen.add(j); walk(j, dir); } }); })(id, down);
+  return seen;
+}
+function highlight(id) {
+  clearMarks();
+  const keep = related(id);
+  svg.querySelectorAll(".node").forEach(el => {
+    el.classList.toggle("dim", !keep.has(el.dataset.id));
+    el.classList.toggle("on", el.dataset.id === id);
+  });
+  svg.querySelectorAll(".edge").forEach(el => {
+    const live = keep.has(el.dataset.from) && keep.has(el.dataset.to);
+    el.classList.toggle("dim", !live);
+    el.classList.toggle("on", live && el.classList.contains("dep"));
+  });
+  show(id);
+}
+function names(ids) {
+  return ids.length
+    ? ids.map(i => `<span>${byId[i].key} &nbsp;${byId[i].title}</span>`).join("")
+    : `<span>none</span>`;
+}
+function show(id) {
+  const n = byId[id];
+  const dir = n.track;
+  detail.innerHTML =
+    `<h2>${n.key} &nbsp;${n.title}</h2>
+     <div class="t">${n.topic}</div>
+     <p>${n.desc || ""}</p>
+     <div class="files">statsPy/${dir}/${n.id}.py<br>statsR/${dir}/${n.id}.R</div>
+     <div class="rel">
+       <div><b>Needs</b>${names(up[id])}</div>
+       <div><b>Needed by</b>${names(down[id])}</div>
+     </div>`;
+}
+svg.querySelectorAll(".node").forEach(el => {
+  const id = el.dataset.id;
+  el.addEventListener("mouseenter", () => { if (!pinned) highlight(id); });
+  el.addEventListener("focus",      () => { if (!pinned) highlight(id); });
+  el.addEventListener("click", () => {
+    pinned = pinned === id ? null : id;
+    pinned ? highlight(id) : reset();
+  });
+  el.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); el.click(); } });
+});
+document.querySelector(".stage").addEventListener("mouseleave", () => { if (!pinned) reset(); });
+function reset() {
+  clearMarks();
+  detail.innerHTML = `<p class="hint">Point at a module to trace what it needs and what needs it. Click to keep it selected.</p>`;
+  applyFilters();
+}
+document.getElementById("showOrder").addEventListener("change", e => {
+  svg.querySelectorAll(".edge.order").forEach(p => p.style.display = e.target.checked ? "" : "none");
+});
+const off = new Set();
+document.querySelectorAll(".key").forEach(b => b.addEventListener("click", () => {
+  const t = b.dataset.track;
+  off.has(t) ? off.delete(t) : off.add(t);
+  b.setAttribute("aria-pressed", String(!off.has(t)));
+  pinned = null; clearMarks(); applyFilters();
+}));
+function applyFilters() {
+  svg.querySelectorAll(".node").forEach(el => {
+    el.style.display = off.has(byId[el.dataset.id].track) ? "none" : "";
+  });
+  svg.querySelectorAll(".edge").forEach(el => {
+    const hide = off.has(byId[el.dataset.from].track) || off.has(byId[el.dataset.to].track);
+    el.style.display = hide ? "none" : "";
+  });
+}
+</script>
+</body>
+</html>

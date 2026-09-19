@@ -674,10 +674,10 @@ print(f"\nFigure written to {OUT}/rnaseq.png")
 # se_l2 = res_paired["se"] / np.log(2)
 # z_hi = (res_paired["lfc"] - tau) / se_l2
 # z_lo = (-res_paired["lfc"] - tau) / se_l2
-# p_thr = np.minimum(1.0, 2 * np.minimum(st.norm.sf(z_hi), 1) +
-#                          2 * np.minimum(st.norm.sf(z_lo), 1))
+# # The gene is "interesting" if the effect exceeds tau in EITHER direction,
+# # so take the smaller of the two one-sided tails and double it.
 # p_thr = np.clip(np.minimum(st.norm.sf(z_hi), st.norm.sf(z_lo)) * 2, 0, 1)
-# b_rej = pd.Series(st.false_discovery_control(p_thr.values) < 0.05,
+# b_rej = pd.Series(st.false_discovery_control(p_thr) < 0.05,
 #                   index=res_paired.index)
 #
 # for lab, rej in [("(a) test vs 0, then filter |LFC|", a_rej),
