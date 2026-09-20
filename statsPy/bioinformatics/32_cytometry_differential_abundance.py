@@ -181,7 +181,7 @@ X["cluster"] = km.labels_
 # you would annotate by marker medians).
 ann = (X.groupby("cluster")["true_pop"]
        .agg(lambda s: s.value_counts().idxmax()))
-purity = (X.groupby("cluster")
+purity = (X.groupby("cluster")[["true_pop"]]
           .apply(lambda g: (g["true_pop"] == ann[g.name]).mean()))
 print(f"  {'cluster':>8}{'n events':>11}{'annotation':>13}{'purity':>9}")
 for c in sorted(X["cluster"].unique()):

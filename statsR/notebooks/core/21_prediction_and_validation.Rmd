@@ -98,6 +98,102 @@ cat("  signature'. Nothing in the data supports it. The honest number sits at\n"
 cat("  chance, exactly as it must.\n")
 ```
 
+## 1b. Does OUTCOME-BLIND preprocessing leak too?
+
+Section 1 selected features using the outcome, which is catastrophic. A
+widely repeated claim is that fitting any preprocessing on all the rows
+leaks as well. That is worth measuring rather than assuming.
+
+```{r preprocessing-leak}
+header("1b. Unsupervised preprocessing fitted on all rows")
+```
+
+A single 5-fold CV at n = 60 has a standard error of roughly 0.06 on the
+AUC, larger than the effect we are chasing, so replicate over many
+independent NULL datasets (the discipline of Module 29).
+
+```{r}
+auc_simple <- function(lab, score) {
+  r <- rank(score); n1 <- sum(lab == 1); n0 <- sum(lab == 0)
+  if (n1 == 0 || n0 == 0) return(NA_real_)
+  (sum(r[lab == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+null_auc <- function(p_feat, n = 60, n_rep = 60, k = 20) {
+  leaky <- honest <- numeric(n_rep)
+  for (rep_ in seq_len(n_rep)) {
+    set.seed(10000 + rep_)
+    X <- matrix(rnorm(n * p_feat), n)
+    y <- rbinom(n, 1, 0.5)
+    fold <- sample(rep_len(1:5, n))
+    ## LEAKY: PCA sees every row, including the held-out ones.
+    pc_all <- prcomp(X, center = TRUE, scale. = TRUE)$x[, 1:k, drop = FALSE]
+    pr <- rep(NA_real_, n)
+    for (kk in 1:5) {
+      tr <- fold != kk
+      if (length(unique(y[tr])) < 2) next
+      m <- suppressWarnings(glm(y ~ ., binomial(),
+                                data.frame(y = y[tr], pc_all[tr, ])))
+      pr[!tr] <- predict(m, data.frame(pc_all[!tr, , drop = FALSE]),
+                         type = "response")
+    }
+    leaky[rep_] <- auc_simple(y[!is.na(pr)], pr[!is.na(pr)])
+    ## HONEST: PCA refitted inside each fold, test rows projected onto it.
+    pr <- rep(NA_real_, n)
+    for (kk in 1:5) {
+      tr <- fold != kk
+      if (length(unique(y[tr])) < 2) next
+      p_ <- prcomp(X[tr, , drop = FALSE], center = TRUE, scale. = TRUE)
+      Ztr <- p_$x[, 1:k, drop = FALSE]
+      Zte <- predict(p_, X[!tr, , drop = FALSE])[, 1:k, drop = FALSE]
+      m <- suppressWarnings(glm(y ~ ., binomial(),
+                                data.frame(y = y[tr], Ztr)))
+      colnames(Zte) <- colnames(Ztr)
+      pr[!tr] <- predict(m, data.frame(Zte), type = "response")
+    }
+    honest[rep_] <- auc_simple(y[!is.na(pr)], pr[!is.na(pr)])
+  }
+  c(mean(leaky, na.rm = TRUE), mean(honest, na.rm = TRUE),
+    sd(leaky, na.rm = TRUE) / sqrt(n_rep))
+}
+cat("  Pure-noise data (outcome is a coin flip), so the honest AUC is 0.5.\n")
+cat("  Averaged over 60 independent datasets to beat the CV noise:\n\n")
+cat(sprintf("  %14s%18s%18s%11s%8s\n", "p (features)", "PCA on all rows",
+            "PCA in the fold", "optimism", "MC SE"))
+for (pf in c(200, 800)) {
+  r_ <- null_auc(pf)
+  cat(sprintf("  %14s%18.4f%18.4f%+11.4f%8.4f\n",
+              format(pf, big.mark = ","), r_[1], r_[2], r_[1] - r_[2], r_[3]))
+}
+cat("
+  (An overfit model can score BELOW 0.5 out of fold, which is why some entries
+  are near 0.45: with 20 PCs fitted to 60 noise samples the model has learned
+  structure that does not generalise, so it is actively anti-predictive on the
+  held-out rows. That is expected, not a bug.)
+
+  READ THE RESULT HONESTLY: the optimism is within Monte-Carlo error of ZERO.
+  Fitting an UNSUPERVISED PCA on all rows did not measurably inflate
+  performance here. That is the correct conclusion from this experiment, and
+  it is worth stating plainly rather than asserting a leak the data do not
+  show.
+
+  So distinguish two classes of preprocessing:
+
+  (a) OUTCOME-BLIND steps - scaling, PCA, quantile normalisation,
+      unsupervised batch correction. They never see y, so the only thing they
+      can leak is the test FEATURE distribution, and as measured above that is
+      a small effect. Still put them inside the fold: it costs nothing, and
+      steps that borrow across ROWS (kNN or iterative imputation,
+      sample-to-sample quantile normalisation) leak considerably more than
+      PCA does.
+
+  (b) OUTCOME-AWARE steps - feature selection by association with y,
+      normalising cases and controls separately, choosing a cut-point to
+      maximise separation. These are CATASTROPHIC, as section 1 showed.
+
+  The distinction matters because treating every preprocessing step as equally
+  dangerous leads people to distrust the wrong things and miss the real leak.\n")
+```
+
 ## 2. Leak #2 -- splitting a donor's cells across folds
 
 ```{r leak-donor}

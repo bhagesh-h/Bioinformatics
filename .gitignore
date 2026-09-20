@@ -1,5 +1,10 @@
 # Figures and output written by the modules at run time.
 results/
+
+# Datasets pulled by tools/fetch_data.py. Provenance is recorded per dataset
+# but the data itself does not belong in the repository.
+data/raw/*
+!data/raw/.gitkeep
 *.png
 !docs/**/*.png
 

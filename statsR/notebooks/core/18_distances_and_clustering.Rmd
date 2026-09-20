@@ -168,10 +168,72 @@ cat("  Silhouette is POSITIVE even with no real structure - it ALWAYS finds\n")
 cat("  something. The gap statistic and stability are far more informative.\n")
 ```
 
-## 5. Double dipping in clustering
+## 5. Embedding distances and cluster areas are meaningless, eq. (18.14)
+
+Python's module uses t-SNE. The base R image has no t-SNE, but the point is
+not specific to it: any embedding that preserves only LOCAL structure
+discards global geometry. Non-metric MDS (`MASS::isoMDS`) makes this
+explicit, because it fits the ORDER of the distances and not their size.
+
+```{r embedding}
+header("5. Embedding distances and cluster areas are meaningless (18.14)")
+set.seed(1804)
+## Three groups at KNOWN, very different true separations.
+g1 <- matrix(rnorm(60 * 10), 60)
+g2 <- matrix(rnorm(60 * 10), 60); g2[, 1] <- g2[, 1] + 6    # near g1
+g3 <- matrix(rnorm(60 * 10), 60); g3[, 1] <- g3[, 1] + 40   # VERY far
+Xt <- rbind(g1, g2, g3)
+lab <- rep(1:3, each = 60)
+cen <- function(M) colMeans(M)
+true_d12 <- sqrt(sum((cen(g1) - cen(g2))^2))
+true_d13 <- sqrt(sum((cen(g1) - cen(g3))^2))
+cat(sprintf("  TRUE centroid distances: d(1,2) = %.2f, d(1,3) = %.2f   ratio %.2f\n",
+            true_d12, true_d13, true_d13 / true_d12))
+D_emb <- dist(Xt)
+cat(sprintf("\n  %-26s%13s%13s%8s\n", "embedding", "emb d(1,2)", "emb d(1,3)",
+            "ratio"))
+emb_ratio <- function(E) {
+  a <- colMeans(E[lab == 1, ]); b <- colMeans(E[lab == 2, ])
+  cc <- colMeans(E[lab == 3, ])
+  c(sqrt(sum((a - b)^2)), sqrt(sum((a - cc)^2)))
+}
+## Metric MDS (PCA on distances) DOES preserve global geometry - the control.
+e_cmd <- cmdscale(D_emb, k = 2)
+r_ <- emb_ratio(e_cmd)
+cat(sprintf("  %-26s%13.2f%13.2f%8.2f\n", "classical (metric) MDS", r_[1],
+            r_[2], r_[2] / r_[1]))
+## Non-metric MDS keeps only the RANK of the distances.
+for (sd_ in c(1, 2)) {
+  set.seed(sd_)
+  init <- cmdscale(D_emb, k = 2) + matrix(rnorm(2 * nrow(Xt), 0, 5), ncol = 2)
+  e <- suppressWarnings(MASS::isoMDS(D_emb, y = init, k = 2, trace = FALSE)$points)
+  r_ <- emb_ratio(e)
+  cat(sprintf("  %-26s%13.2f%13.2f%8.2f\n",
+              sprintf("non-metric MDS, seed %d", sd_), r_[1], r_[2],
+              r_[2] / r_[1]))
+}
+cat(sprintf("\n  The TRUE ratio is %.1f. Classical MDS reproduces it, because it
+  minimises a METRIC stress and so keeps the geometry. Non-metric MDS does not:
+  it only has to get the ORDER right, so it is free to place the far group at
+  whatever distance makes the local structure fit, and the answer moves with
+  the starting configuration.\n", true_d13 / true_d12))
+cat("
+  t-SNE and UMAP are further along the same spectrum. Both optimise a
+  neighbourhood objective (eq. 18.14) that preserves LOCAL structure and
+  deliberately discards global geometry, and both add a random initialisation
+  on top. A t-SNE map's between-cluster gaps and cluster areas are artefacts of
+  perplexity, initialisation and seed.
+
+  NEVER: measure distances on a nonlinear embedding; compare cluster areas;
+  report an embedding without the seed, perplexity or n_neighbors, and n_PCs
+  used. If you need distances, compute them in the space you trust (the PCs),
+  not on the picture.\n")
+```
+
+## 6. Double dipping in clustering
 
 ```{r double-dipping}
-header("5. Testing the features that defined the clusters")
+header("6. Testing the features that defined the clusters")
 set.seed(1806)
 n <- 100; G <- 1500
 Xhom <- matrix(rnorm(n*G), n)               # ONE homogeneous population
@@ -204,7 +266,7 @@ cat("  distribution suggests, because analysts report the TOP 'marker genes' -\n
 cat("  precisely the features the clustering selected on (stats.md Topic 21).\n")
 ```
 
-## 6. Figure
+## 7. Figure
 
 ```{r figure}
 png(file.path(OUT, "clustering.png"), width = 1100, height = 800, res = 110)

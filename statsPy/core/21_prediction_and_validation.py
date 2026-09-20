@@ -141,7 +141,12 @@ for p_feat in [200, 800, 3000]:
     print(f"  {p_feat:>14,}{a_leak:>18.4f}{a_ok:>18.4f}"
           f"{a_leak - a_ok:>+11.4f}{se:>8.4f}")
 
-print("\n  READ THE RESULT HONESTLY: the optimism is within Monte-Carlo error")
+print("""
+  (An overfit model can score BELOW 0.5 out of fold: with 20 PCs fitted to 60
+  noise samples it has learned structure that does not generalise, so it is
+  anti-predictive on the held-out rows. Expected, not a bug.)
+""")
+print("  READ THE RESULT HONESTLY: the optimism is within Monte-Carlo error")
 print("  of ZERO at every p. Fitting an UNSUPERVISED PCA on all rows did not")
 print("  measurably inflate performance here. That is the correct conclusion")
 print("  from this experiment, and it is worth stating plainly rather than")

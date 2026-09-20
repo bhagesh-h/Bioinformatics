@@ -332,10 +332,81 @@ print(f"  optimism from the leak: "
       f"{np.mean(c_leaky) - np.mean(c_honest):+.3f}")
 print(f"  gain over the clinical baseline: "
       f"{np.mean(c_honest) - np.mean(c_clin):+.3f}")
-print("\n  Two lessons. First, selecting genes outside the fold inflates the")
-print("  C-index - the same leak as Module 21. Second, ALWAYS report the")
-print("  clinical-only baseline: a molecular score that does not beat age and")
-print("  stage is not a useful biomarker, however significant its p-value.")
+print("""
+  Read the leak line carefully: the optimism is tiny. That is NOT evidence the
+  leak is harmless. The 5 true genes here have a large effect and are selected
+  in EVERY fold, so 'selecting on all the data' picks the same genes anyway.
+  A strong signal hides the leak. Section 6b turns the signal off.
+
+  The other lesson stands on its own: ALWAYS report the clinical-only
+  baseline. A molecular score that does not beat age and stage is not a useful
+  biomarker, however significant its p-value.""")
+
+# %% [markdown]
+# ## 6b. The same leak, measured where it is visible
+
+# %%
+header("6b. Measuring the selection leak on cohorts with NO prognostic gene")
+
+# Turn the signal off (beta = 0). Any apparent skill from the gene score is
+# now pure leakage, and the reference is the CLINICAL baseline rather than
+# 0.5, because age and stage stay genuinely prognostic.
+REP = 12
+cl, ch, cc = [], [], []
+for i in range(REP):
+    d0, _ = simulate_survival_cohort(n=150, G=200, n_prog=0, beta=0.0,
+                                     seed=3800 + i)
+    g0 = [c for c in d0.columns if c.startswith("G")]
+    kf0 = KFold(5, shuffle=True, random_state=100 + i)
+    r0 = cox_screen(d0, g0)
+    sel0 = list(r0.index[r0["p"] < 0.01]) or list(r0.nsmallest(3, "p").index)
+    a, b, c = [], [], []
+    for tr, te in kf0.split(d0):
+        trd, ted = d0.iloc[tr], d0.iloc[te]
+        # honest: reselect inside the fold
+        fh, sh = build_score(trd, g0)
+        a.append(concordance_index(ted["time"],
+                 -fh.predict_partial_hazard(ted[sh + ["age", "stage"]]),
+                 ted["event"]))
+        # leaky: genes chosen on all the data
+        fl = CoxPHFitter(penalizer=0.1).fit(
+            trd[["time", "event"] + sel0 + ["age", "stage"]],
+            duration_col="time", event_col="event")
+        b.append(concordance_index(ted["time"],
+                 -fl.predict_partial_hazard(ted[sel0 + ["age", "stage"]]),
+                 ted["event"]))
+        # the true ceiling: clinical variables only
+        fc = CoxPHFitter().fit(trd[["time", "event", "age", "stage"]],
+                               duration_col="time", event_col="event")
+        c.append(concordance_index(ted["time"],
+                 -fc.predict_partial_hazard(ted[["age", "stage"]]),
+                 ted["event"]))
+    ch.append(np.mean(a)); cl.append(np.mean(b)); cc.append(np.mean(c))
+ch, cl, cc = np.array(ch), np.array(cl), np.array(cc)
+
+print(f"  {REP} null cohorts (n = 150, 200 genes, NO true prognostic gene):")
+print(f"  {'evaluation':<42}{'mean C':>10}{'beats clinical':>16}")
+print(f"  {'CV, genes selected on ALL data (LEAKY)':<42}{cl.mean():>10.3f}"
+      f"{np.mean(cl > cc):>16.0%}")
+print(f"  {'CV, selection INSIDE each fold (honest)':<42}{ch.mean():>10.3f}"
+      f"{np.mean(ch > cc):>16.0%}")
+print(f"  {'CV, age + stage only (the true ceiling)':<42}{cc.mean():>10.3f}"
+      f"{'-':>16}")
+print(f"\n  leaky  - clinical baseline: {np.mean(cl - cc):+.3f}"
+      f"   <- entirely spurious")
+print(f"  honest - clinical baseline: {np.mean(ch - cc):+.3f}")
+print("""
+  Note the reference is the CLINICAL baseline, not 0.5: age and stage stay
+  prognostic here, so even a gene score built from pure noise inherits their
+  skill. Read the two gaps against it:
+
+    honest CV lands BELOW the clinical baseline. Correct - the noise genes add
+    parameters and no signal, so they cost precision and degrade the model. An
+    honest evaluation is able to say 'these genes make it worse'.
+
+    leaky CV lands ABOVE it. The genes were chosen while looking at the test
+    fold, so the score is scored on the very data that defined it. Select
+    features INSIDE the fold - the same leak as Module 21.""")
 
 # %% [markdown]
 # ## 7. Immortal time bias

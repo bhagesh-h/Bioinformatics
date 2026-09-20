@@ -403,15 +403,23 @@ y = X[:, 0] * 0.0 + rng.normal(0, 1, n)          # NO real signal at all
 Xm = X.copy()
 Xm[rng.random((n, p)) < 0.3] = np.nan
 
-def cv_r2(X, y, impute_inside, seed=0):
+from sklearn.impute import KNNImputer
+
+
+def make_imputer(kind):
+    """Mean imputation uses only COLUMN statistics; kNN borrows across ROWS."""
+    return SimpleImputer() if kind == "mean" else KNNImputer(n_neighbors=5)
+
+
+def cv_r2(X, y, impute_inside, kind="mean", seed=0):
     kf = KFold(5, shuffle=True, random_state=seed)
     scores = []
     if not impute_inside:
         # LEAKY: impute using statistics computed from ALL rows, then CV.
-        X = SimpleImputer().fit_transform(X)
+        X = make_imputer(kind).fit_transform(X)
     for tr, te in kf.split(X):
         if impute_inside:
-            model = Pipeline([("imp", SimpleImputer()),
+            model = Pipeline([("imp", make_imputer(kind)),
                               ("lm", LinearRegression())])
         else:
             model = LinearRegression()
@@ -422,12 +430,38 @@ def cv_r2(X, y, impute_inside, seed=0):
 
 
 print(f"  Data contain NO signal; honest R^2 should be <= 0.")
-print(f"    impute BEFORE CV (leaky)  : R^2 = {cv_r2(Xm, y, False):+.4f}")
-print(f"    impute INSIDE the fold    : R^2 = {cv_r2(Xm, y, True):+.4f}")
-print("\n  Here the leak is modest because SimpleImputer only uses column means.")
-print("  With an iterative or kNN imputer - which borrows across ROWS - the")
-print("  leak is severe. RULE: wrap every learned step in a Pipeline so the")
-print("  fold boundary is enforced structurally, not by discipline (Module 21).")
+print(f"  Averaged over 30 datasets, so the comparison is not one draw:\n")
+print(f"  {'imputer':<34}{'before CV (leaky)':>19}{'inside the fold':>18}"
+      f"{'optimism':>11}")
+for kind, lab in (("mean", "column mean (no row borrowing)"),
+                  ("knn", "kNN, k=5 (borrows across ROWS)")):
+    lk, hn = [], []
+    for rep in range(30):
+        r2 = np.random.default_rng(1600 + rep)
+        Xr = r2.normal(0, 1, (n, p))
+        yr = r2.normal(0, 1, n)                     # NO real signal at all
+        Xmr = Xr.copy()
+        Xmr[r2.random((n, p)) < 0.3] = np.nan
+        lk.append(cv_r2(Xmr, yr, False, kind, seed=rep))
+        hn.append(cv_r2(Xmr, yr, True, kind, seed=rep))
+    print(f"  {lab:<34}{np.mean(lk):>19.4f}{np.mean(hn):>18.4f}"
+          f"{np.mean(lk) - np.mean(hn):>+11.4f}")
+
+print("""
+  Both rows should be at or below zero, because there is nothing to predict.
+
+  Mean imputation leaks little: it only ever uses COLUMN statistics, so a
+  held-out row contributes almost nothing to how it is filled.
+
+  kNN imputation leaks much more, and the reason is structural: it fills a
+  cell by copying from the most similar ROWS, and when it is fitted on all the
+  data those neighbours include the test rows themselves. The test row is
+  partly reconstructed from its own values before the model ever sees it.
+
+  This is the rule behind the classification in Module 21: what matters is not
+  whether a step is 'preprocessing' but whether it BORROWS ACROSS ROWS. Wrap
+  every learned step in a Pipeline so the fold boundary is enforced
+  structurally rather than by discipline.""")
 
 # %% [markdown]
 # ## 6. Figure

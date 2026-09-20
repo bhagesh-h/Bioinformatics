@@ -1,0 +1,377 @@
+#' ---
+#' title: "Applied 44 - Power and design for omics experiments"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 44, equations (44.1)-(44.3)
+#' **Core modules used:** 01, 09, 29, 31
+#'
+#' ## The question
+#'
+#' Fixed budget. How many donors, how many cells per donor, how deep?
+#'
+#' ## A refinement to Module 01
+#'
+#' Module 01 showed that sub-samples hit a floor at $\sigma_d^2/n$ and
+#' concluded that replicates buy power and sub-samples do not. That is
+#' correct. This module locates the floor, and the location changes the
+#' practical advice: in scRNA-seq the per-cell noise is so large that cells DO
+#' buy power, steeply, until they suddenly stop.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "44_power_and_design_for_omics"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(44)
+
+#' ## 1. Where the floor actually is, eq. (44.1)
+#'
+#' $$\mathrm{Var}(\bar y)=\frac{\sigma_d^2}{n}+\frac{\sigma_c^2}{nm}
+#'   \qquad (44.1)$$
+
+#+ floor
+header("1. Var(pseudobulk mean) = sigma_d^2/n + sigma_c^2/(nm)  (44.1)")
+SD_DONOR <- 0.30        # biological variation between donors, log scale
+cat(sprintf("  donor SD = %.2f. The per-cell SD depends on the gene's counts.\n\n",
+            SD_DONOR))
+cat(sprintf("  %-14s%s\n", "cells/donor",
+            paste(sprintf("%14s", paste0("sigma_c=", c(0.5, 1.5, 4.0))),
+                  collapse = "")))
+for (m in c(1, 5, 20, 100, 500, 2000)) {
+  row <- sapply(c(0.5, 1.5, 4.0),
+                function(sc) sqrt(SD_DONOR^2 / 8 + sc^2 / (8 * m)))
+  cat(sprintf("  %-14d%s\n", m,
+              paste(sprintf("%14.4f", row), collapse = "")))
+}
+cat(sprintf("\n  floor (m -> infinity), n = 8 donors: %.4f\n",
+            SD_DONOR / sqrt(8)))
+cat("\n  Read across a row and then down a column. With a well-measured gene
+  (sigma_c = 0.5) the floor is reached by about 20 cells and extra cells are
+  wasted, which is the Module 01 conclusion.
+
+  With a lowly expressed gene (sigma_c = 4.0) you are still far above the
+  floor at 500 cells per donor. For that gene, cells are the binding
+  constraint, not donors.
+
+  Both statements are eq. (44.1). Which one applies depends on the gene, and a
+  real experiment contains both kinds at once.\n")
+
+#' ## 2. Simulated power across the three-way design
+
+#+ power
+header("2. Power over donors, cells and depth")
+#' Simulate a two-group pseudobulk comparison. Per-cell counts are Poisson
+#' with mean proportional to depth, so the per-cell measurement noise falls as
+#' depth rises. Donor effects are the irreducible biological variation.
+power_pseudobulk <- function(n_donors, n_cells, depth, effect = 0.5,
+                             n_sim = 400, seed = 0) {
+  set.seed(seed)
+  hits <- 0
+  for (i in seq_len(n_sim)) {
+    vals <- lapply(0:1, function(grp) {
+      donor_mean <- rnorm(n_donors, grp * effect, SD_DONOR)
+      lam <- exp(donor_mean) * depth
+      counts <- matrix(rpois(n_donors * n_cells, rep(lam, n_cells)), n_donors)
+      log(rowSums(counts) + 1) - log(n_cells * depth)   # pseudobulk
+    })
+    # At very low depth every count can be zero, leaving nothing to test.
+    # That is a failure to detect, so it counts as a non-rejection.
+    pv <- tryCatch(t.test(vals[[2]], vals[[1]])$p.value, error = function(e) 1)
+    hits <- hits + (pv < 0.05)
+  }
+  hits / n_sim
+}
+cat("  effect = 0.5 on the log scale, depth = 1.0 (a moderately expressed gene)\n\n")
+cat(sprintf("  %-9s%s\n", "donors",
+            paste(sprintf("%12s", paste0(c(5, 20, 100, 500), " cells")),
+                  collapse = "")))
+for (nd in c(3, 5, 8, 15)) {
+  row <- sapply(c(5, 20, 100, 500),
+                function(m) power_pseudobulk(nd, m, 1.0, seed = nd * 10 + m))
+  cat(sprintf("  %-9d%s\n", nd, paste(sprintf("%12.2f", row), collapse = "")))
+}
+cat("\n  Read ACROSS: cells help, and then they stop helping. Read DOWN:
+  donors keep helping all the way.
+
+  The plateau is the floor from eq. (44.1). Past it, sequencing more cells
+  from the same people adds cost and no information about the between-group
+  difference. Before it, cells are genuinely buying power.
+
+  The practical question is therefore not 'cells or donors' but 'where is the
+  plateau for the genes I care about', and that depends on their expression.\n")
+
+#' ## 3. The same table for a lowly expressed gene
+
+#+ depth
+header("3. Depth moves the plateau")
+cat(sprintf("  %-9s%s\n", "depth",
+            paste(sprintf("%12s", paste0(c(5, 20, 100, 500), " cells")),
+                  collapse = "")))
+for (dp in c(0.1, 0.5, 2.0)) {
+  row <- sapply(c(5, 20, 100, 500),
+                function(m) power_pseudobulk(6, m, dp, seed = round(dp * 100) + m))
+  cat(sprintf("  %-9.1f%s\n", dp, paste(sprintf("%12.2f", row), collapse = "")))
+}
+cat("\n  At low depth the gene is barely detected per cell, so the per-cell
+  noise is enormous and more cells keep helping well past 100. At high depth
+  the plateau arrives early.
+
+  This is the trade behind the standard advice that SHALLOW sequencing of MANY
+  cells usually beats deep sequencing of few: for a fixed number of reads,
+  spreading them over more cells reduces the sampling term in (44.1) faster
+  than it raises per-cell precision. The advice is empirical, and it follows
+  from this table rather than from a principle.\n")
+
+#' ## 4. Cost, eq. (44.2)
+#'
+#' $$\text{cost}=n\,(c_{donor}+m\,c_{cell})\le B \qquad (44.2)$$
+
+#+ budget
+header("4. Optimising under a budget (44.2)")
+C_DONOR <- 1200.0; C_CELL <- 0.30          # currency per donor, per cell
+BUDGET <- 20000.0
+cat(sprintf("  budget %s; donor costs %.0f, cell costs %.2f\n",
+            format(BUDGET, big.mark = ","), C_DONOR, C_CELL))
+cat("  Every row spends the whole budget. Two genes, same design.\n\n")
+cat(sprintf("  %-9s%12s%13s%22s%22s\n", "donors", "cells each", "total cost",
+            "power, well-measured", "power, lowly expr."))
+grid <- c(3, 5, 7, 9, 11, 13, 15, 16)
+pw_hi <- pw_lo <- rep(NA_real_, length(grid))
+for (i in seq_along(grid)) {
+  nd <- grid[i]
+  m <- floor((BUDGET / nd - C_DONOR) / C_CELL)
+  if (m < 5) next
+  pw_hi[i] <- power_pseudobulk(nd, min(m, 2000), 1.0, n_sim = 300, seed = nd)
+  pw_lo[i] <- power_pseudobulk(nd, min(m, 20000), 0.02, n_sim = 300,
+                               seed = nd + 500)
+  cat(sprintf("  %-9d%12s%13s%22.2f%22.2f\n", nd, format(m, big.mark = ","),
+              format(round(nd * (C_DONOR + m * C_CELL)), big.mark = ","),
+              pw_hi[i], pw_lo[i]))
+}
+cat(sprintf("\n  best design, well-measured gene : %d donors\n",
+            grid[which.max(pw_hi)]))
+cat(sprintf("  best design, lowly expressed gene: %d donors\n",
+            grid[which.max(pw_lo)]))
+cat("\n  The two genes want different designs out of the same money.
+
+  For the WELL-MEASURED gene the plateau from eq. (44.1) arrives after a few
+  dozen cells, so every design on this table already clears it. Cells beyond
+  that buy nothing, donors buy everything, and the best designs sit at the far
+  edge of the table, where cells are an afterthought. This is Module 01's
+  advice, and here it is correct.
+
+  For the LOWLY EXPRESSED gene the plateau is thousands of cells away. Power
+  rises with donors at first, peaks, and then FALLS: past the peak, each extra
+  donor takes so much money from the cell budget that every donor is measured
+  too badly to be worth having. That is a genuinely interior optimum, and no
+  rule of thumb would have found it.
+
+  Note this optimum is for ONE estimand, differential expression between
+  groups. The next section shows a different estimand with a different
+  optimum, using exactly the same money.\n")
+
+#' ## 5. A different question, a different design, eq. (44.3)
+#'
+#' $$P(\text{at least one cell of a type at frequency } q)=1-(1-q)^m
+#'   \qquad (44.3)$$
+
+#+ rare
+header("5. Detecting a rare cell type (44.3)")
+cat("  P(at least one cell of a type at frequency q) = 1 - (1-q)^m\n\n")
+cat(sprintf("  %-14s%s\n", "cells/donor",
+            paste(sprintf("%12s", paste0("q=", c(0.05, 0.01, 0.002))),
+                  collapse = "")))
+for (m in c(20, 100, 500, 2000, 5000))
+  cat(sprintf("  %-14d%s\n", m,
+              paste(sprintf("%12.3f", 1 - (1 - c(0.05, 0.01, 0.002))^m),
+                    collapse = "")))
+cat("\n  For a type at 0.2% frequency you need thousands of cells per donor
+  just to SEE it, and seeing one cell is not the same as quantifying it: to
+  estimate its abundance you need enough cells for the count to be stable.
+
+  Compare with section 2, where 100 cells per donor was already past the
+  plateau. Same money, opposite advice, because the estimand changed.
+
+  This is the practical reason design questions cannot be answered
+  generically. 'How many cells should I sequence' has no answer until someone
+  says what the experiment is for.\n")
+
+#' ## 6. Simulate the actual pipeline, not a formula
+
+#+ closed-form
+header("6. Closed-form power versus the pipeline you will run")
+#' Closed form: two-sample t-test on donor means with a known variance.
+closed_form_power <- function(nd, m, effect = 0.5, sc = 1.2) {
+  var_ <- SD_DONOR^2 + sc^2 / m
+  se <- sqrt(2 * var_ / nd)
+  ncp <- effect / se
+  crit <- qt(0.975, 2 * nd - 2)
+  pt(crit, 2 * nd - 2, ncp, lower.tail = FALSE) +
+    pt(-crit, 2 * nd - 2, ncp)
+}
+cat(sprintf("  %-9s%-9s%14s%21s\n", "donors", "cells", "closed form",
+            "simulated pipeline"))
+for (z in list(c(4, 50), c(6, 50), c(6, 200), c(10, 200)))
+  cat(sprintf("  %-9d%-9d%14.2f%21.2f\n", z[1], z[2],
+              closed_form_power(z[1], z[2]),
+              power_pseudobulk(z[1], z[2], 1.0, n_sim = 400,
+                               seed = z[1] * z[2])))
+cat("\n  The closed form is in the right region but not reliable at small n,
+  because it assumes a variance structure the pipeline does not exactly have:
+  the pseudobulk log transform, the Poisson sampling and the estimated
+  variance all matter.
+
+  For a design that will be analysed with DESeq2, a mixed model or a
+  pseudobulk pipeline, simulate THAT pipeline. A power calculation for a test
+  you are not going to run is a number, not a plan. This is the ADEMP
+  discipline of Module 29 applied to design.\n")
+
+#' ## 7. Figure
+
+#+ figure, fig.width = 13, fig.height = 4.5
+png(file.path(OUT, "omics_power.png"), width = 1300, height = 450)
+par(mfrow = c(1, 3), mar = c(4.5, 4.5, 3, 1))
+ms <- c(1, 2, 5, 10, 20, 50, 100, 300, 1000, 3000)
+cols <- c("steelblue", "darkorange", "firebrick")
+scs <- c(0.5, 1.5, 4.0)
+plot(ms, sqrt(SD_DONOR^2 / 8 + scs[1]^2 / (8 * ms)), type = "b", pch = 16,
+     log = "x", col = cols[1], ylim = c(0, 1.5), xlab = "cells per donor",
+     ylab = "SE of the group mean", main = "Where the floor is (44.1)")
+for (i in 2:3)
+  lines(ms, sqrt(SD_DONOR^2 / 8 + scs[i]^2 / (8 * ms)), type = "b", pch = 16,
+        col = cols[i])
+abline(h = SD_DONOR / sqrt(8), lty = 2)
+legend("topright", c(paste0("sigma_c = ", scs), "floor"), lwd = 2, bty = "n",
+       lty = c(1, 1, 1, 2), col = c(cols, "black"))
+cellgrid <- c(5, 20, 100, 500)
+pw <- sapply(c(3, 5, 8, 15), function(nd)
+  sapply(cellgrid, function(m) power_pseudobulk(nd, m, 1.0, n_sim = 250,
+                                                seed = nd * 10 + m)))
+matplot(cellgrid, pw, type = "b", pch = 16, lty = 1, log = "x", ylim = c(0, 1),
+        col = hcl.colors(4, "Dark 3"), xlab = "cells per donor",
+        ylab = "power", main = "Cells plateau, donors do not")
+legend("bottomright", paste0(c(3, 5, 8, 15), " donors"), lwd = 2, bty = "n",
+       col = hcl.colors(4, "Dark 3"))
+mm <- c(10, 50, 100, 500, 1000, 3000, 8000)
+plot(mm, 1 - (1 - 0.05)^mm, type = "b", pch = 16, log = "x", col = "steelblue",
+     ylim = c(0, 1), xlab = "cells per donor",
+     ylab = "P(at least one cell)", main = "Seeing a rare type (44.3)")
+lines(mm, 1 - (1 - 0.01)^mm, type = "b", pch = 16, col = "darkorange")
+lines(mm, 1 - (1 - 0.002)^mm, type = "b", pch = 16, col = "firebrick")
+legend("bottomright", c("q = 5%", "q = 1%", "q = 0.2%"), lwd = 2, bty = "n",
+       col = c("steelblue", "darkorange", "firebrick"))
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "omics_power.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: Spend a fixed budget three ways
+#'
+#' With the same money, find the best design for (a) differential expression,
+#' (b) finding a 1% cell type, and (c) quantifying a lowly expressed gene.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# BUD <- 20000.0
+# cat(sprintf("  %-9s%9s%11s%17s%17s\n", "donors", "cells", "DE power",
+#             "P(see 1% type)", "low-gene power"))
+# for (nd in c(3, 6, 10, 20)) {
+#   m <- floor((BUD / nd - C_DONOR) / C_CELL)
+#   if (m < 5) next
+#   m <- min(m, 3000)
+#   de <- power_pseudobulk(nd, min(m, 600), 1.0, n_sim = 250, seed = nd)
+#   low <- power_pseudobulk(nd, min(m, 600), 0.15, n_sim = 250, seed = nd + 7)
+#   cat(sprintf("  %-9d%9s%11.2f%17.3f%17.2f\n", nd,
+#               format(m, big.mark = ","), de, 1 - (1 - 0.01)^m, low))
+# }
+#
+# ## Three columns, three different optima from the same budget. Differential
+# ## expression wants donors. Seeing a rare cell type wants cells, and with
+# ## few donors you can afford a great many. The lowly expressed gene sits
+# ## between them, because it needs both depth per cell and donors to average
+# ## over.
+# ##
+# ## There is no design that is best at all three, which is the point. Decide
+# ## the primary estimand before the budget meeting, and state explicitly what
+# ## the design is NOT powered for. A study powered for DE that then reports a
+# ## rare-population finding is reporting something its design cannot support.
+
+#' ### Problem 2: How wrong is a power calculation with a guessed variance?
+#'
+#' Power calculations need $\sigma_d$, which you rarely know in advance.
+#' Quantify the consequences of guessing it wrong.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# TRUE_SD <- 0.30
+# cat(sprintf("  true donor SD = %.2f. Design for 80%% power at effect 0.5.\n\n",
+#             TRUE_SD))
+# cat(sprintf("  %-14s%16s%15s\n", "assumed SD", "donors planned",
+#             "ACTUAL power"))
+# for (guess in c(0.15, 0.22, 0.30, 0.45, 0.60)) {
+#   nd <- 3
+#   while (nd < 200) {
+#     se <- sqrt(2 * (guess^2 + 1.2^2 / 100) / nd)
+#     if (pt(qt(0.975, 2*nd-2), 2*nd-2, 0.5/se, lower.tail = FALSE) > 0.80) break
+#     nd <- nd + 1
+#   }
+#   actual <- power_pseudobulk(nd, 100, 1.0, n_sim = 500,
+#                              seed = round(guess * 100))
+#   cat(sprintf("  %-14.2f%16d%15.2f\n", guess, nd, actual))
+# }
+#
+# ## Underestimating the donor SD by a factor of two roughly halves the
+# ## achieved power, and the study is planned, funded and run before anyone
+# ## finds out. Overestimating wastes money but is at least safe.
+# ##
+# ## Two responses. Estimate sigma_d from PILOT or PUBLIC data on the same
+# ## tissue and platform rather than guessing, which is what tools like
+# ## scPower do. And report power across a RANGE of plausible variances rather
+# ## than a single number, so the reader can see how fragile the plan is.
+
+#' ### Problem 3: Does adding donors always beat adding cells?
+#'
+#' Find the regime where the answer is no.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# cat("  Starting from 6 donors x 30 cells. Which upgrade helps more?\n\n")
+# cat(sprintf("  %-14s%11s%12s%11s%13s\n", "gene depth", "baseline",
+#             "+2 donors", "x4 cells", "better buy"))
+# for (dp in c(0.05, 0.2, 1.0, 4.0)) {
+#   base <- power_pseudobulk(6, 30, dp, n_sim = 500, seed = round(dp * 100))
+#   more_d <- power_pseudobulk(8, 30, dp, n_sim = 500, seed = round(dp*100) + 1)
+#   more_c <- power_pseudobulk(6, 120, dp, n_sim = 500, seed = round(dp*100) + 2)
+#   cat(sprintf("  %-14.2f%11.2f%12.2f%11.2f%13s\n", dp, base, more_d, more_c,
+#               if (more_d > more_c) "donors" else "cells"))
+# }
+#
+# ## At high depth the gene is measured well in every cell, the per-cell term
+# ## in (44.1) is already small, and donors win, exactly as Module 01 says.
+# ##
+# ## At low depth the per-cell term dominates and quadrupling the cells wins,
+# ## sometimes clearly. Module 01's conclusion is not wrong; it describes the
+# ## regime past the plateau, and lowly expressed genes are not in it.
+# ##
+# ## The honest summary is that 'donors, not cells' is a good DEFAULT and a bad
+# ## RULE. Check where your genes of interest sit relative to the plateau
+# ## before committing a budget, because for the lowly expressed genes that
+# ## motivate many single-cell studies the default advice is backwards.
+
+#' ## What to take away
+#'
+#' 1. Eq. (44.1) is eq. (1.5). What changed is knowing **where the floor is**,
+#'    and for lowly expressed genes it is far out.
+#' 2. Cells buy power steeply and then stop. Donors keep buying it.
+#' 3. Depth moves the plateau, which is why shallow-and-many usually beats
+#'    deep-and-few for a fixed read budget.
+#' 4. **The estimand decides the design.** DE wants donors, rare populations
+#'    want cells, and the same budget gives different optima.
+#' 5. Simulate the pipeline you will actually run, not a t-test you will not.
+#'
+#' **Next:** `45_longitudinal_causal.R`

@@ -229,7 +229,98 @@ cat("\n  Treat MNAR and MAR features DIFFERENTLY. Applying one imputer to both\n
 cat("  is the standard mistake (stats.md Topic 25, Module 35).\n")
 ```
 
-## 5. Figure
+## 5. Imputing before cross-validation leaks information
+
+Imputation is a LEARNED step. Fit it on all the rows and the held-out rows
+have already contributed to how they themselves are filled.
+
+```{r impute-leak}
+header("5. Imputing before cross-validation leaks information")
+impute_mean <- function(X) {
+  cm <- colMeans(X, na.rm = TRUE); cm[!is.finite(cm)] <- 0
+  for (j in seq_len(ncol(X))) X[is.na(X[, j]), j] <- cm[j]
+  X
+}
+```
+
+kNN imputation: fill each missing cell from the k most similar ROWS. This
+is what makes it leak - the neighbours can include the test rows.
+
+```{r}
+impute_knn <- function(X, k = 5) {
+  cm <- colMeans(X, na.rm = TRUE); cm[!is.finite(cm)] <- 0
+  Xf <- impute_mean(X)
+  out <- X
+  D <- as.matrix(dist(Xf))
+  for (i in seq_len(nrow(X))) {
+    miss <- which(is.na(X[i, ]))
+    if (!length(miss)) next
+    nb <- order(D[i, ])[2:(k + 1)]
+    for (j in miss) {
+      v <- X[nb, j]; v <- v[!is.na(v)]
+      out[i, j] <- if (length(v)) mean(v) else cm[j]
+    }
+  }
+  out
+}
+cv_r2 <- function(X, y, impute_inside, imputer, seed = 0) {
+  set.seed(seed)
+  fold <- sample(rep_len(1:5, nrow(X)))
+  if (!impute_inside) X <- imputer(X)     # LEAKY: uses every row, then CV
+  sc <- numeric(5)
+  for (k in 1:5) {
+    tr <- fold != k; te <- !tr
+    Xtr <- X[tr, , drop = FALSE]; Xte <- X[te, , drop = FALSE]
+    if (impute_inside) {
+      ## Fit the imputer on the training rows, then apply it to the test rows
+      ## WITHOUT letting them influence each other.
+      Xtr <- imputer(Xtr)
+      cm <- colMeans(Xtr); cm[!is.finite(cm)] <- 0
+      for (j in seq_len(ncol(Xte))) Xte[is.na(Xte[, j]), j] <- cm[j]
+    }
+    m <- lm(y[tr] ~ ., data.frame(Xtr))
+    pr <- predict(m, data.frame(Xte))
+    sc[k] <- 1 - sum((y[te] - pr)^2) / sum((y[te] - mean(y[tr]))^2)
+  }
+  mean(sc)
+}
+n <- 120; p <- 40
+cat("  Data contain NO signal; honest R^2 should be <= 0.\n")
+cat("  Averaged over 20 datasets, so the comparison is not one draw:\n\n")
+cat(sprintf("  %-34s%19s%18s%11s\n", "imputer", "before CV (leaky)",
+            "inside the fold", "optimism"))
+for (z in list(list("column mean (no row borrowing)", impute_mean),
+               list("kNN, k=5 (borrows across ROWS)", impute_knn))) {
+  lk <- hn <- numeric(20)
+  for (rep_ in 1:20) {
+    set.seed(1600 + rep_)
+    Xr <- matrix(rnorm(n * p), n)
+    yr <- rnorm(n)                                # NO real signal at all
+    Xr[matrix(runif(n * p), n) < 0.3] <- NA
+    lk[rep_] <- cv_r2(Xr, yr, FALSE, z[[2]], seed = rep_)
+    hn[rep_] <- cv_r2(Xr, yr, TRUE, z[[2]], seed = rep_)
+  }
+  cat(sprintf("  %-34s%19.4f%18.4f%+11.4f\n", z[[1]], mean(lk), mean(hn),
+              mean(lk) - mean(hn)))
+}
+cat("
+  Both rows should be at or below zero, because there is nothing to predict.
+
+  Mean imputation leaks little: it only ever uses COLUMN statistics, so a
+  held-out row contributes almost nothing to how it is filled.
+
+  kNN imputation leaks more, and the reason is structural: it fills a cell by
+  copying from the most similar ROWS, and when it is fitted on all the data
+  those neighbours include the test rows themselves. The test row is partly
+  reconstructed from its own values before the model ever sees it.
+
+  This is the rule behind the classification in Module 21: what matters is not
+  whether a step is 'preprocessing' but whether it BORROWS ACROSS ROWS. Fit
+  every learned step inside the fold so the boundary is enforced structurally
+  rather than by discipline.\n")
+```
+
+## 6. Figure
 
 ```{r figure}
 png(file.path(OUT, "missing_data.png"), width = 1300, height = 420, res = 110)

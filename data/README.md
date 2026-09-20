@@ -50,6 +50,34 @@ docker run --rm -it -v "$PWD":/work -w /work learn-stats-r:1.0 R
 > reproducible. That is the whole point of `env/`.
 
 
+## A script that does all of this for you
+
+`tools/fetch_data.py` automates the whole routine: it installs the required
+Bioconductor package inside the R container, loads the dataset, and writes it
+to `data/raw/<key>/` as plain files any language can read.
+
+```bash
+python3 tools/fetch_data.py --list            # what is available
+python3 tools/fetch_data.py --get airway      # one dataset
+python3 tools/fetch_data.py --get airway,kang18
+```
+
+Each dataset lands as `counts.csv.gz`, `coldata.csv`, `rowdata.csv`, the
+original `object.rds`, and a `PROVENANCE.txt` recording the package version
+and the date of the download. Nothing is installed on the host: the script
+shells out to `learn-stats-r:1.0` and runs as your own user, so the files it
+writes are yours rather than root's.
+
+`data/raw/` is gitignored, so downloaded data never enters the repository.
+The keys map onto the sections below: `airway`, `kang18`, `bodenmiller`,
+`minfi`, `snpstats`, `msdata`, `metagenomic`, `visium`, `lung`, `msigdb`,
+`tcga`.
+
+The first fetch of a dataset is slow, because the Bioconductor package has to
+be installed into a throwaway container. If you intend to use one repeatedly,
+add it to `env/r-packages.R` and rebuild the image instead.
+
+
 ## Module-by-module
 
 ### 30: Bulk RNA-seq differential expression

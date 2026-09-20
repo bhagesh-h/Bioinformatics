@@ -111,12 +111,50 @@ median_normalise <- function(Y) {                                # eq. (25.2)
   sweep(Y, 2, cm) + median(cm)
 }
 Ynorm <- median_normalise(Yobs)
-cat(sprintf("  Spearman(run order, sample median): before %+.3f, after %+.3f\n",
-            cor(smeta$run_order, apply(Yobs, 2, median, na.rm = TRUE), method = "spearman"),
-            cor(smeta$run_order, apply(Ynorm, 2, median, na.rm = TRUE), method = "spearman")))
-cat("  ALWAYS plot intensity against INJECTION ORDER before and after. With\n")
-cat("  pooled QC samples injected throughout the run, fit a LOESS curve per\n")
-cat("  feature against run order and subtract it (the metabolomics standard).\n")
+cat(sprintf("  %-8s%15s%14s%8s%11s\n", "sample", "median before", "median after",
+            "plex", "run order"))
+for (s_ in colnames(Yobs)[1:6])
+  cat(sprintf("  %-8s%15.3f%14.3f%8s%11d\n", s_,
+              median(Yobs[, s_], na.rm = TRUE),
+              median(Ynorm[, s_], na.rm = TRUE),
+              smeta[s_, "plex"], smeta[s_, "run_order"]))
+before <- cor(smeta$run_order, apply(Yobs, 2, median, na.rm = TRUE),
+              method = "spearman")
+cat(sprintf("\n  Spearman(run order, sample median) BEFORE: %+.3f\n", before))
+cat("  Spearman(run order, sample median) AFTER : undefined\n")
+cat("
+  That second line is not a bug, and it is worth understanding. Median
+  normalisation subtracts each column's median and adds one common constant,
+  so after it every sample median is IDENTICAL by construction. A correlation
+  against a constant has zero variance in one argument and is undefined.
+
+  The trap is to read that as \"the drift is gone\". It is not gone; this
+  particular diagnostic has simply been blinded to it. Median normalisation
+  removes a GLOBAL shift per sample. Drift that pushes different features by
+  different amounts survives untouched, and a per-feature check still sees
+  it:\n")
+#' Fraction of features whose intensity still tracks run order.
+drift_fraction <- function(Y) {
+  ro <- smeta$run_order
+  hits <- 0
+  for (i in seq_len(nrow(Y))) {
+    v <- as.numeric(Y[i, ]); ok <- is.finite(v)
+    if (sum(ok) < 8) next
+    if (suppressWarnings(cor.test(ro[ok], v[ok],
+                                  method = "spearman"))$p.value < 0.05)
+      hits <- hits + 1
+  }
+  hits / nrow(Y)
+}
+cat(sprintf("    features correlated with run order, before: %.1f%%\n",
+            100 * drift_fraction(Yobs)))
+cat(sprintf("    features correlated with run order, after : %.1f%%\n",
+            100 * drift_fraction(Ynorm)))
+cat("
+  Always plot intensity against INJECTION ORDER before and after, per feature
+  and not just per sample. With pooled QC samples injected throughout the run,
+  fit a LOESS curve per feature against run order and subtract it, which is
+  the metabolomics standard.\n")
 
 #' ## 4. Peptide -> protein summarisation, eq. (25.3)
 
@@ -170,9 +208,19 @@ cat("  peptide effect and is robust to individual peptides dropping out.\n")
 #+ imputation
 header("5. MNAR vs MAR imputation (Topic 15, eq. 15.8)")
 impute_mnar <- function(Y, shift = 1.8, width = 0.3) {
+  ## A column with fewer than two observed values has no usable sd, and a
+  ## subset of rows (as impute_mixed passes) can easily produce one. Falling
+  ## back to the matrix-wide spread keeps every cell imputed; leaving it NA
+  ## would silently drop the protein from the comparison below.
+  g_sd <- sd(Y, na.rm = TRUE)
+  g_mu <- mean(Y, na.rm = TRUE)
+  if (!is.finite(g_sd) || g_sd == 0) g_sd <- 1
+  if (!is.finite(g_mu)) g_mu <- 0
   apply(Y, 2, function(col) {
-    mu <- mean(col, na.rm = TRUE) - shift*sd(col, na.rm = TRUE)
-    col[is.na(col)] <- rnorm(sum(is.na(col)), mu, width*sd(col, na.rm = TRUE))
+    s <- sd(col, na.rm = TRUE); if (!is.finite(s) || s == 0) s <- g_sd
+    m <- mean(col, na.rm = TRUE); if (!is.finite(m)) m <- g_mu
+    n_miss <- sum(is.na(col))
+    if (n_miss) col[is.na(col)] <- rnorm(n_miss, m - shift*s, width*s)
     col
   })
 }
@@ -206,7 +254,9 @@ test_proteins <- function(P, label, min_obs = 6) {
     if (nlevels(droplevels(d$condition)) < 2 || nrow(d) < min_obs) return(c(NA, 1))
     f <- try(suppressWarnings(lm(y ~ condition + plex, data = d)), silent = TRUE)
     if (inherits(f, "try-error")) return(c(NA, 1))
-    cs <- coef(summary(f))
+    ## summary() warns on a perfect fit; the NaN p-value it produces is
+    ## handled explicitly below, so the warning adds nothing.
+    cs <- suppressWarnings(coef(summary(f)))
     key <- grep("^condition", rownames(cs), value = TRUE)[1]
     if (is.na(key) || !(key %in% rownames(cs))) return(c(NA, 1))
     est <- cs[key, 1]; pv <- cs[key, 4]

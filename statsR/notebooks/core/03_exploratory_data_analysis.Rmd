@@ -208,7 +208,15 @@ for (k in c(3, 5)) abline(v = median(qc_metric) + c(-1, 1) * k * mad(qc_metric),
                           col = if (k == 3) "orange" else "red", lty = 2)
 
 M1 <- assays[[1]]; M2 <- assays[[2]]
-plot(rowMeans(M1), apply(M1, 1, var), log = "xy", pch = ".", col = "steelblue",
+## A log-log plot silently drops non-positive values, so select them
+## explicitly: a gene with zero mean or zero variance is a real observation
+## about the data, not something to let a plotting default hide.
+.mv_m <- rowMeans(M1); .mv_v <- apply(M1, 1, var)
+.mv_ok <- .mv_m > 0 & .mv_v > 0
+if (any(!.mv_ok))
+  cat(sprintf("  (%d of %d genes have zero mean or zero variance and cannot\n   appear on log axes)\n",
+              sum(!.mv_ok), length(.mv_ok)))
+plot(.mv_m[.mv_ok], .mv_v[.mv_ok], log = "xy", pch = ".", col = "steelblue",
      xlab = "mean", ylab = "variance", main = "Eq. (3.6): the assay fingerprint")
 points(rowMeans(M2), apply(M2, 1, var), pch = ".", col = "firebrick")
 lim <- 10^seq(0, 3.5, length.out = 50)

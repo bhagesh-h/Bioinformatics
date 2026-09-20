@@ -73,6 +73,18 @@
 - [Part VIII - Reliability and reproducibility](#part-viii-reliability-and-reproducibility)
   - [Topic 34 - Model diagnostics and sensitivity analysis](#topic-34-model-diagnostics-and-sensitivity-analysis)
   - [Topic 35 - Reproducible statistical workflows](#topic-35-reproducible-statistical-workflows)
+- [Part IX - Modern methods and extensions](#part-ix-modern-methods-and-extensions)
+  - [Topic 36 - Multiple testing beyond Benjamini-Hochberg](#topic-36-multiple-testing-beyond-benjamini-hochberg)
+  - [Topic 37 - Measurement error, attenuation, and regression to the mean](#topic-37-measurement-error-attenuation-and-regression-to-the-mean)
+  - [Topic 38 - Meta-analysis and evidence synthesis](#topic-38-meta-analysis-and-evidence-synthesis)
+  - [Topic 39 - Conformal prediction and distribution-free uncertainty](#topic-39-conformal-prediction-and-distribution-free-uncertainty)
+  - [Topic 40 - Designing a simulation study](#topic-40-designing-a-simulation-study)
+  - [Topic 41 - Trajectory inference and pseudotime](#topic-41-trajectory-inference-and-pseudotime)
+  - [Topic 42 - Deconvolution, integration, and zero-inflation](#topic-42-deconvolution-integration-and-zero-inflation)
+  - [Topic 43 - Fine-mapping, colocalisation, and heritability](#topic-43-fine-mapping-colocalisation-and-heritability)
+  - [Topic 44 - Power and design for omics experiments](#topic-44-power-and-design-for-omics-experiments)
+  - [Topic 45 - Longitudinal and time-varying causal inference](#topic-45-longitudinal-and-time-varying-causal-inference)
+  - [Topic 46 - Model interpretation and pretrained models](#topic-46-model-interpretation-and-pretrained-models)
 - [Appendix A - Distribution reference sheet](#appendix-a-distribution-reference-sheet)
 - [Appendix B - Identities worth memorising](#appendix-b-identities-worth-memorising)
 - [Appendix C - Symbol-to-code dictionary](#appendix-c-symbol-to-code-dictionary)
@@ -196,6 +208,17 @@ These six modules are its runnable companions.
 | 28 Clinical survival | `statsPy/bioinformatics/38_survival_biomarkers.py` | `statsR/bioinformatics/38_survival_biomarkers.R` |
 | 29 Enrichment | `statsPy/bioinformatics/39_gene_set_enrichment.py` | `statsR/bioinformatics/39_gene_set_enrichment.R` |
 | 30 Networks / multi-omics | `statsPy/bioinformatics/40_networks_and_multiomics.py` | `statsR/bioinformatics/40_networks_and_multiomics.R` |
+| 36 Modern multiple testing | `statsPy/core/25_modern_multiple_testing.py` | `statsR/core/25_modern_multiple_testing.R` |
+| 37 Measurement error, RTM | `statsPy/core/26_measurement_error_and_regression.py` | `statsR/core/26_measurement_error_and_regression.R` |
+| 38 Meta-analysis | `statsPy/core/27_meta_analysis.py` | `statsR/core/27_meta_analysis.R` |
+| 39 Conformal prediction | `statsPy/core/28_conformal_prediction.py` | `statsR/core/28_conformal_prediction.R` |
+| 40 Simulation and benchmarking | `statsPy/core/29_simulation_and_benchmarking.py` | `statsR/core/29_simulation_and_benchmarking.R` |
+| 41 Trajectory and pseudotime | `statsPy/bioinformatics/41_trajectory_and_pseudotime.py` | `statsR/bioinformatics/41_trajectory_and_pseudotime.R` |
+| 42 Deconvolution, integration | `statsPy/bioinformatics/42_deconvolution_and_integration.py` | `statsR/bioinformatics/42_deconvolution_and_integration.R` |
+| 43 Advanced statistical genetics | `statsPy/bioinformatics/43_advanced_statistical_genetics.py` | `statsR/bioinformatics/43_advanced_statistical_genetics.R` |
+| 44 Power and design for omics | `statsPy/bioinformatics/44_power_and_design_for_omics.py` | `statsR/bioinformatics/44_power_and_design_for_omics.R` |
+| 45 Longitudinal causal | `statsPy/bioinformatics/45_longitudinal_causal.py` | `statsR/bioinformatics/45_longitudinal_causal.R` |
+| 46 Interpretation, pretrained models | `statsPy/bioinformatics/46_interpretation_and_foundation_models.py` | `statsR/bioinformatics/46_interpretation_and_foundation_models.R` |
 
 ### Integrative exercises
 
@@ -4728,6 +4751,703 @@ or run a competitive gene-set test - all of which need the complete vector
 6. Test properties, calibration and alignment - not just that the code runs.
 
 
+# Part IX: Modern methods and extensions
+
+> These eleven topics were added after the first pass. Each one either corrects
+> a lesson earlier in this document or covers a method that a working
+> bioinformatician now meets routinely. They assume Parts I to VIII.
+
+## Topic 36: Multiple testing beyond Benjamini-Hochberg
+
+**Module:** `25_modern_multiple_testing`
+
+### The question
+
+Topic 8 gave you BH. BH treats every hypothesis as exchangeable and assumes a
+dependence structure you cannot check. What do you use when neither holds?
+
+### Key equations
+
+**Weighted BH.** Attach a non-negative weight $w_i$ to each hypothesis, with
+
+$$\frac{1}{m}\sum_{i=1}^m w_i = 1, \tag{36.1}$$
+
+and apply BH to the weighted p-values $p_i / w_i$. FDR control survives for any
+weights chosen **independently of the p-values**. That independence is the whole
+game: weights from the data you are testing invalidate the guarantee.
+
+**Independent hypothesis weighting (IHW).** Choose the weights from a covariate
+$X_i$ that is informative about power but independent of $p_i$ under the null.
+Mean expression is the canonical choice in RNA-seq. IHW stratifies on $X$, then
+learns weights by cross-weighting: hypotheses are split into $K$ folds, and the
+weights applied to fold $k$ are estimated from the other folds,
+
+$$\hat{w}^{(k)} = \arg\max_{w}\ \#\{\text{rejections in folds} \ne k\}, \tag{36.2}$$
+
+which keeps the weights independent of the p-values they are applied to and
+gives finite-sample FDR control.[^ihw]
+
+Independent filtering (Topic 8) is the special case $w_i \in \{0, c\}$: a hard
+in-or-out weight. IHW is the smooth version, and recovers power that a binary
+filter discards.
+
+**E-values.** An e-value is a non-negative statistic with
+
+$$\mathbb{E}_{H_0}[e] \le 1. \tag{36.3}$$
+
+Whereas a p-value is calibrated by its tail probability, an e-value is
+calibrated by its mean, which makes e-values **combine by averaging** and remain
+valid under arbitrary dependence. The e-BH procedure sorts $e_{(1)} \ge \cdots
+\ge e_{(m)}$ and rejects the $k^*$ largest, where
+
+$$k^* = \max\Big\{k : \frac{m}{k\,\alpha} \le e_{(k)}\Big\}. \tag{36.4}$$
+
+e-BH controls FDR at $\alpha$ **for any dependence whatsoever**, which BH does
+not.[^ebh] A p-value can be converted to an e-value, at a cost in power.
+
+**Knockoffs.** Construct synthetic variables $\tilde{X}_j$ that reproduce the
+covariance structure of $X$ but are conditionally independent of the response.
+For a feature statistic $Z_j$ (a lasso coefficient magnitude, say) define
+
+$$W_j = Z_j - \tilde{Z}_j, \tag{36.5}$$
+
+which is symmetric about zero for null features. The knockoff+ threshold is
+
+$$\tau = \min\Big\{ t > 0 : \frac{1 + \#\{j : W_j \le -t\}}{\#\{j : W_j \ge t\}} \le \alpha \Big\}, \tag{36.6}$$
+
+and rejecting $\{j : W_j \ge \tau\}$ controls FDR in finite samples with **no
+assumption of independence between features**. The denominator counts
+discoveries; the numerator estimates false ones from the negative side of a
+distribution that is symmetric under the null. Knockoffs are randomised, so
+repeated runs disagree; derandomised knockoffs aggregate several runs through
+e-values (36.3) to fix this.[^knock]
+
+### Decision rules
+
+1. Genome-scale testing with an informative, null-independent covariate
+   (mean expression, variance, prior evidence) $\rightarrow$ IHW.
+2. Strong or unknown dependence between tests $\rightarrow$ e-BH, or BY if you
+   want the classical route.
+3. Selecting features in a regression where the features are correlated
+   $\rightarrow$ knockoffs, derandomised if the instability matters.
+4. Never derive weights from the p-values you are about to adjust.
+
+## Topic 37: Measurement error, attenuation, and regression to the mean
+
+**Module:** `26_measurement_error_and_regression`
+
+### The question
+
+Your predictor is an assay readout, so it is measured with error. What does
+that do to your effect estimate, and why did the patients you selected for
+extreme values move back toward average?
+
+### Key equations
+
+**Classical measurement error.** You observe $W$ instead of the true $X$:
+
+$$W = X + U, \qquad \mathbb{E}[U] = 0, \quad U \perp X. \tag{37.1}$$
+
+**Attenuation.** Regressing $Y$ on $W$ rather than $X$ shrinks the slope by the
+reliability ratio
+
+$$\lambda = \frac{\sigma_X^2}{\sigma_X^2 + \sigma_U^2} \in (0, 1], \tag{37.2}$$
+
+$$\mathbb{E}[\hat\beta_W] = \lambda \beta_X. \tag{37.3}$$
+
+Noise in a **predictor** biases its coefficient toward zero. Noise in the
+**outcome** does not bias the slope, it only inflates the standard error. That
+asymmetry surprises people and it decides where to spend assay effort.
+
+If $\lambda$ is known from replicate measurements, correct by
+
+$$\hat\beta_X = \hat\beta_W / \hat\lambda, \qquad
+\widehat{\operatorname{Var}}(\hat\beta_X) = \widehat{\operatorname{Var}}(\hat\beta_W)/\hat\lambda^2. \tag{37.4}$$
+
+With a second noisy measurement available, regression calibration or SIMEX give
+the same correction without assuming $\lambda$ known.
+
+**The multivariable trap.** With several predictors measured with error, the
+bias is no longer a simple shrinkage: error in one predictor can bias the
+coefficients of the *others* in either direction. "It only attenuates" is true
+for simple regression and false in general.
+
+**Regression to the mean.** Let $(Y_1, Y_2)$ be two measurements with common
+mean $\mu$, common SD $\sigma$ and correlation $\rho$. Then
+
+$$\mathbb{E}[Y_2 \mid Y_1 = y_1] = \mu + \rho\,(y_1 - \mu), \tag{37.5}$$
+
+so selecting subjects with extreme $y_1$ guarantees an expected move toward
+$\mu$ of
+
+$$\mathbb{E}[Y_2 - Y_1 \mid Y_1 = y_1] = (\rho - 1)(y_1 - \mu), \tag{37.6}$$
+
+with **no treatment and no biology required**. The effect is largest when
+$\rho$ is small, which is exactly when the assay is noisy.
+
+### Decision rules
+
+1. Selection on a baseline value $\rightarrow$ expect (37.6) and include a
+   control group. A single-arm before-and-after study in a selected group
+   measures regression to the mean.
+2. Report assay reliability $\lambda$ when a predictor is an assay readout.
+3. Do not interpret a small coefficient on a noisy predictor as a small effect.
+4. Never adjust for the baseline by selecting on it; adjust for it in the model.
+
+## Topic 38: Meta-analysis and evidence synthesis
+
+**Module:** `27_meta_analysis`
+
+### The question
+
+Five studies, five effect sizes. What is the combined estimate, and is a single
+combined number even the right summary?
+
+### Key equations
+
+**Fixed-effect (common-effect) model.** Assume every study estimates the same
+$\theta$. Weight by inverse variance:
+
+$$w_i = 1/\sigma_i^2, \qquad
+\hat\theta_{\text{FE}} = \frac{\sum w_i \hat\theta_i}{\sum w_i}, \qquad
+\operatorname{Var}(\hat\theta_{\text{FE}}) = \frac{1}{\sum w_i}. \tag{38.1}$$
+
+**Heterogeneity.** Cochran's $Q$ tests whether the studies are consistent:
+
+$$Q = \sum_i w_i (\hat\theta_i - \hat\theta_{\text{FE}})^2 \sim \chi^2_{k-1}
+  \ \ \text{under homogeneity}. \tag{38.2}$$
+
+$$I^2 = \max\left(0, \frac{Q - (k-1)}{Q}\right) \tag{38.3}$$
+
+is the proportion of total variability due to real between-study differences
+rather than sampling error. $I^2$ is a **proportion, not an amount**: a large
+$I^2$ with tiny studies can still mean small absolute heterogeneity.
+
+**Random-effects model.** Allow $\theta_i \sim N(\theta, \tau^2)$. The
+DerSimonian-Laird estimator is
+
+$$\hat\tau^2 = \max\left(0, \frac{Q - (k-1)}{\sum w_i - \sum w_i^2 / \sum w_i}\right), \tag{38.4}$$
+
+$$w_i^* = \frac{1}{\sigma_i^2 + \hat\tau^2}, \qquad
+\hat\theta_{\text{RE}} = \frac{\sum w_i^* \hat\theta_i}{\sum w_i^*}. \tag{38.5}$$
+
+Random effects do not "fix" heterogeneity. They change the estimand from "the
+effect" to "the mean of a distribution of effects", and they up-weight small
+studies, which is dangerous when small studies are the biased ones.
+
+**The prediction interval** is the honest summary when $\tau^2 > 0$, because it
+covers where a *new* study would land rather than where the mean sits:
+
+$$\hat\theta_{\text{RE}} \pm t_{k-2}\sqrt{\hat\tau^2 + \operatorname{Var}(\hat\theta_{\text{RE}})}. \tag{38.6}$$
+
+**Combining p-values is not meta-analysis.** Fisher's method,
+
+$$-2\sum_i \ln p_i \sim \chi^2_{2k}, \tag{38.7}$$
+
+tests the global null that *no* study has an effect. It gives no effect size, no
+direction and no interval, and a single strong study can carry it.
+
+### Decision rules
+
+1. Report $\tau^2$, $I^2$ and a prediction interval, not just the pooled point.
+2. Substantial heterogeneity is a finding, not a nuisance to be averaged away.
+3. Check small-study effects (funnel asymmetry, Egger regression) before
+   trusting a random-effects mean.
+4. Use (38.7) only when the question really is "did anything happen anywhere".
+
+## Topic 39: Conformal prediction and distribution-free uncertainty
+
+**Module:** `28_conformal_prediction`
+
+### The question
+
+Topic 31 gave you calibration for probabilities. What if you want an interval
+around each prediction with a coverage guarantee that holds without believing
+your model?
+
+### Key equations
+
+**Split conformal.** Hold out a calibration set of size $n$, disjoint from
+training. Define a nonconformity score, for regression typically
+
+$$s_i = |y_i - \hat{f}(x_i)|. \tag{39.1}$$
+
+Take the empirical quantile
+
+$$\hat{q} = \text{the } \Big\lceil (n+1)(1-\alpha) \Big\rceil \text{-th smallest of } \{s_i\}, \tag{39.2}$$
+
+and predict the interval $\hat{f}(x_{\text{new}}) \pm \hat{q}$. Then
+
+$$\Pr\big(y_{\text{new}} \in \hat{C}(x_{\text{new}})\big) \ge 1 - \alpha \tag{39.3}$$
+
+in **finite samples, for any model, with no distributional assumption**. The
+only requirement is exchangeability between calibration and test data.
+
+Note the ceiling and the $n+1$ in (39.2). They are not cosmetic: they are what
+make the guarantee exact rather than asymptotic.
+
+**What it does not give.** Coverage in (39.3) is *marginal*, averaged over the
+population. It does not promise 90% coverage within every subgroup. Conformalised
+quantile regression fixes the width to vary with $x$,
+
+$$s_i = \max\big(\hat{q}_{\alpha/2}(x_i) - y_i,\ y_i - \hat{q}_{1-\alpha/2}(x_i)\big), \tag{39.4}$$
+
+giving intervals that widen where the model is genuinely less certain.
+
+**Classification.** With $\hat{\pi}_y(x)$ the predicted probability of class
+$y$, score $s_i = 1 - \hat\pi_{y_i}(x_i)$ and the prediction *set* is
+
+$$\hat{C}(x) = \{y : 1 - \hat\pi_y(x) \le \hat{q}\}, \tag{39.5}$$
+
+which may contain zero, one, or several labels. An empty set means "this sample
+is unlike anything I was calibrated on", which is information a point prediction
+destroys.
+
+**Exchangeability is the assumption that fails.** Under distribution shift, a
+new batch, a new site, a new platform, the guarantee lapses. That is the same
+grouping problem as Topic 1, and conformal prediction does not solve it.
+
+### Decision rules
+
+1. Any model used for a decision $\rightarrow$ report a conformal set, not a
+   point.
+2. Heteroscedastic outcomes $\rightarrow$ CQR (39.4) rather than constant width.
+3. Grouped data (patients, sites) $\rightarrow$ split by group, exactly as in
+   cross-validation.
+4. Report set size as well as coverage: 100% coverage with useless width is
+   easy.
+
+## Topic 40: Designing a simulation study
+
+**Module:** `29_simulation_and_benchmarking`
+
+### The question
+
+Every module in this course evaluates a method by simulation. How do you design
+such a study so its conclusions mean something?
+
+### Key equations
+
+**ADEMP.** State the Aims, the Data-generating mechanism, the Estimand, the
+Methods compared, and the Performance measures, before writing code.[^ademp]
+
+**Performance measures**, for estimates $\hat\theta_1, \dots, \hat\theta_{n_{\text{sim}}}$:
+
+$$\widehat{\text{Bias}} = \bar{\hat\theta} - \theta, \qquad
+\widehat{\text{EmpSE}} = \sqrt{\tfrac{1}{n_{\text{sim}}-1}\sum(\hat\theta_j - \bar{\hat\theta})^2}, \tag{40.1}$$
+
+$$\widehat{\text{MSE}} = \tfrac{1}{n_{\text{sim}}}\sum(\hat\theta_j - \theta)^2
+ = \widehat{\text{Bias}}^2 + \tfrac{n_{\text{sim}}-1}{n_{\text{sim}}}\widehat{\text{EmpSE}}^2. \tag{40.2}$$
+
+**Monte Carlo standard error.** A simulation is itself an experiment and its
+results carry uncertainty. For a coverage or rejection proportion $\hat{p}$,
+
+$$\text{MCSE}(\hat p) = \sqrt{\frac{\hat p (1-\hat p)}{n_{\text{sim}}}}, \tag{40.3}$$
+
+so the number of repetitions needed for a target precision is
+
+$$n_{\text{sim}} = \frac{\hat p (1 - \hat p)}{\text{MCSE}^2}. \tag{40.4}$$
+
+Checking whether a test holds its 5% level to within 0.5% needs
+$n_{\text{sim}} \approx 1900$. Reporting "the false positive rate was 4%" from
+100 runs reports noise.
+
+For bias, $\text{MCSE}(\widehat{\text{Bias}}) = \widehat{\text{EmpSE}}/\sqrt{n_{\text{sim}}}$.
+
+**Common random numbers.** Comparing methods on the *same* simulated datasets
+removes between-dataset variation from the comparison and sharply reduces the
+MCSE of a difference. Always compare paired.
+
+### Decision rules
+
+1. Write ADEMP down before coding. A simulation without a stated estimand
+   cannot be wrong, which means it cannot be right.
+2. Report MCSE alongside every simulated performance number.
+3. Compare methods on shared datasets, not independent ones.
+4. Include a case where the method should fail. A benchmark every method passes
+   discriminates nothing.
+5. Vary one thing at a time, and include the null.
+
+## Topic 41: Trajectory inference and pseudotime
+
+**Module:** `41_trajectory_and_pseudotime`
+
+### The question
+
+Cells are captured once and killed. What licenses ordering them along a
+continuum and calling that time?
+
+### Key equations
+
+**Pseudotime as a projection.** Fit a one-dimensional curve $g(t)$ through the
+reduced-dimension cloud and assign each cell the arclength of its projection:
+
+$$t_i = \arg\min_t \| z_i - g(t) \|^2. \tag{41.1}$$
+
+Pseudotime is an **ordering**, not a duration. Equal pseudotime steps are not
+equal real-time steps, and the units are arbitrary.
+
+**Testing along a trajectory.** Model expression as a smooth function of
+pseudotime with a generalised additive model,
+
+$$\log \mathbb{E}[Y_{gi}] = \log s_i + \sum_{k=1}^{K} \beta_{gk} b_k(t_i), \tag{41.2}$$
+
+with $b_k$ a spline basis and $s_i$ the size factor, then test
+$H_0: \beta_{g1} = \cdots = \beta_{gK} = 0$.
+
+**The double-dipping problem.** The pseudotime $t_i$ in (41.2) was estimated
+from the same expression matrix $Y$. Testing genes for association with a
+variable derived from those genes inflates the error rate exactly as testing
+genes that defined a cluster does (Topic 18). Under a null of no trajectory at
+all, (41.2) still produces "significant" genes, because the curve was fitted to
+whatever structure the noise contained.
+
+Defences: fit the trajectory on one set of cells and test on another; or use
+only a subset of genes to build the trajectory and test the held-out genes; or
+compare against a null trajectory fitted to permuted data.
+
+**Uncertainty in the ordering is rarely propagated.** Bootstrap the cells,
+refit, and compare orderings; the spread is often large near branch points, and
+downstream p-values that ignore it are overconfident.
+
+**RNA velocity** estimates a direction from the unspliced-to-spliced ratio,
+
+$$\frac{du}{dt} = \alpha - \beta u, \qquad \frac{ds}{dt} = \beta u - \gamma s, \tag{41.3}$$
+
+with the steady-state assumption giving $\gamma$ from the slope of $s$ on $u$.
+The model assumes constant kinetic rates across cells and genes, which is
+frequently violated, and the resulting arrows can be confidently wrong. Treat
+velocity as a hypothesis generator.
+
+### Decision rules
+
+1. Report pseudotime as an ordering. Never convert it to hours without external
+   calibration.
+2. Never test for trajectory-associated genes using the trajectory those genes
+   built, unless you split the data.
+3. Fit a trajectory to a null dataset before believing yours.
+4. Branch assignments near a bifurcation are the least stable part of the
+   output; bootstrap them.
+
+## Topic 42: Deconvolution, integration, and zero-inflation
+
+**Module:** `42_deconvolution_and_integration`
+
+### The question
+
+Bulk tissue is a mixture. Batches differ. Single-cell counts are mostly zeros.
+Which of those three is a modelling problem and which is a myth?
+
+### Key equations
+
+**Deconvolution.** A bulk profile is a weighted sum of cell-type signatures,
+
+$$y = S w + \varepsilon, \qquad w_k \ge 0, \quad \sum_k w_k = 1, \tag{42.1}$$
+
+with $S$ the signature matrix ($G \times K$) and $w$ the proportions. Solve by
+constrained least squares,
+
+$$\hat w = \arg\min_{w \ge 0,\ \mathbf{1}^\top w = 1} \| y - Sw \|_2^2, \tag{42.2}$$
+
+optionally with support vector regression or a weighted loss to downweight
+high-variance genes.
+
+Three things break it: signatures from the wrong tissue or platform; collinear
+signatures for related cell types, which makes $\hat w$ unstable in exactly the
+way collinear predictors do in Topic 11; and the fact that the estimates are
+**compositional** (Topic 26), so one cell type rising forces others to fall.
+
+**Batch integration.** Mutual nearest neighbours estimates a correction from
+cells that are reciprocally nearest across batches,
+
+$$\delta_i = \frac{1}{|\mathcal{M}_i|}\sum_{j \in \mathcal{M}_i} (x_j - x_i), \tag{42.3}$$
+
+then subtracts a smoothed version of $\delta$. The mutual criterion is what
+stops it forcing together populations present in only one batch.
+
+Integration trades mixing against biological preservation. Any correction
+strong enough to remove all batch signal will remove biology that is correlated
+with batch, and if the design is confounded there is no correction that
+distinguishes them (Topic 19). Report both a mixing metric and a
+biology-preservation metric, never one alone.
+
+**Zero-inflation.** A zero-inflated negative binomial adds a point mass:
+
+$$\Pr(Y = 0) = \pi + (1-\pi)\,\text{NB}(0; \mu, \phi), \qquad
+\Pr(Y = y > 0) = (1-\pi)\,\text{NB}(y; \mu, \phi). \tag{42.4}$$
+
+The question is whether $\pi > 0$ is needed. For **UMI-based** protocols the
+answer is generally no: the negative binomial already predicts the observed
+number of zeros once the mean-variance relationship is fitted, because a small
+$\mu$ produces many zeros by itself. Fitting an unnecessary $\pi$ costs power
+and can distort $\mu$.
+
+The diagnostic is direct: compare observed zeros per gene against the NB
+prediction
+
+$$\Pr(Y = 0) = \left(\frac{1/\phi}{1/\phi + \mu}\right)^{1/\phi}. \tag{42.5}$$
+
+Excess zeros beyond this curve are evidence for inflation; agreement is
+evidence against it. Read-based and plate-based protocols behave differently
+from UMI protocols, so the answer is assay-specific, not universal.
+
+**Cell-cell communication** scores a ligand-receptor pair by combining its
+expression in a sender and a receiver cell type,
+
+$$C_{LR}^{(a \to b)} = f\big(\bar{x}_L^{(a)},\ \bar{x}_R^{(b)}\big), \tag{42.6}$$
+
+and tests it by permuting cell-type labels. That null permutes labels but keeps
+the same cells, so it tests "is this pair unusual for these cell types", not "do
+these cells talk". Scores are also driven by expression magnitude, so abundant
+ligands dominate. False-positive rates in benchmarks are high.
+
+### Decision rules
+
+1. Deconvolution signatures must match the tissue and platform, and the output
+   is compositional.
+2. Report mixing **and** biology preservation after integration.
+3. Test for zero-inflation before modelling it. For UMI data, expect not to
+   need it.
+4. Treat communication scores as a ranked hypothesis list, not inference.
+
+## Topic 43: Fine-mapping, colocalisation, and heritability
+
+**Module:** `43_advanced_statistical_genetics`
+
+### The question
+
+Topic 24 found associated loci. Which variant is causal, does it act through
+the trait you care about, and how much of the trait is genetic at all?
+
+### Key equations
+
+**Approximate Bayes factors.** For a variant with effect estimate $\hat\beta$
+and standard error $s$, under a prior $\beta \sim N(0, W)$,
+
+$$\text{ABF} = \sqrt{\frac{s^2}{s^2 + W}}\ \exp\!\left(\frac{W}{s^2+W}\cdot\frac{\hat\beta^2}{2s^2}\right). \tag{43.1}$$
+
+**Posterior inclusion probability** under a single-causal-variant assumption:
+
+$$\text{PIP}_j = \frac{\text{ABF}_j}{\sum_{k \in \text{locus}} \text{ABF}_k}. \tag{43.2}$$
+
+**Credible set.** Sort PIPs descending and take the smallest set with
+
+$$\sum_{j \in \mathcal{C}} \text{PIP}_j \ge 0.95. \tag{43.3}$$
+
+A 95% credible set of 40 variants in tight LD is an honest answer, and far more
+useful than naming the lead SNP. The single-causal assumption is the weak point;
+methods such as SuSiE relax it to several.
+
+**Colocalisation** asks whether two traits share a causal variant at a locus,
+enumerating five hypotheses (neither, one only, the other only, both with
+distinct variants, both with a shared variant) and computing
+
+$$\Pr(H_4 \mid \text{data}) \propto \sum_{j} \text{ABF}_j^{(1)}\,\text{ABF}_j^{(2)}\,p_{12}. \tag{43.4}$$
+
+High $\Pr(H_4)$ supports a shared mechanism. Note that LD alone can produce
+high $\Pr(H_3)$ that is easy to misread as sharing.
+
+**LD score regression.** Under polygenicity, the expected association
+chi-square at variant $j$ grows with its LD score $\ell_j = \sum_k r_{jk}^2$:
+
+$$\mathbb{E}[\chi^2_j] = \frac{N h^2}{M}\,\ell_j + 1 + Na, \tag{43.5}$$
+
+so the **slope** estimates heritability
+
+$$\hat h^2 = \frac{M}{N} \times \text{slope}, \tag{43.6}$$
+
+and the **intercept** above 1 estimates confounding such as residual population
+structure. This is the key separation: genomic inflation $\lambda$ cannot tell
+polygenicity from confounding, and (43.5) can.
+
+**Mendelian randomisation with invalid instruments.** IVW (24.9) assumes every
+instrument is valid. Relaxations:
+
+$$\hat\beta_j = \beta_0 + \beta\,\hat\gamma_j + \epsilon_j \quad \text{(MR-Egger)}, \tag{43.7}$$
+
+where the intercept $\beta_0 \ne 0$ indicates directional pleiotropy and the
+slope remains consistent under the InSIDE condition. The weighted median is
+consistent if over half the weight comes from valid instruments; the mode-based
+estimator needs only that valid instruments form the largest cluster. These
+assumptions are ordered from strong to weak and the estimators from precise to
+imprecise, so report all of them and compare.
+
+**Winner's curse.** An effect estimated in the same data that selected it is
+biased away from the null by roughly
+
+$$\mathbb{E}[\hat\beta \mid |\hat\beta| > c] \approx \beta + s\,\frac{\phi(c/s - \beta/s)}{1 - \Phi(c/s - \beta/s)}, \tag{43.8}$$
+
+which is why discovery effect sizes shrink in replication and why PRS weights
+from discovery data over-fit.
+
+### Decision rules
+
+1. Report credible sets, not lead SNPs.
+2. Use the LDSC intercept, not $\lambda$, to argue that inflation is polygenic.
+3. Report IVW with Egger, weighted median and mode. Agreement is the evidence;
+   a single estimator is not.
+4. Estimate PRS weights in data disjoint from both discovery and evaluation.
+
+## Topic 44: Power and design for omics experiments
+
+**Module:** `44_power_and_design_for_omics`
+
+### The question
+
+Given a fixed budget, how many donors, how many cells per donor, and how deep?
+
+### Key equations
+
+**Variance of a pseudobulk estimate.** With $n$ donors, $m$ cells per donor and
+depth-driven per-cell noise $\sigma_c^2$,
+
+$$\operatorname{Var}(\bar{Y}) = \frac{\sigma_d^2}{n} + \frac{\sigma_c^2}{nm}, \tag{44.1}$$
+
+which is eq. (1.5) again. Topic 1 drew the conclusion that cells hit a floor at
+$\sigma_d^2/n$, and that is correct. The refinement that matters in practice is
+**where** the floor is: in scRNA-seq $\sigma_c^2$ is large, because a single
+cell's count for a given gene is a tiny, noisy sample, so the second term
+dominates until $m$ is in the hundreds. Cells do buy power, up to a plateau,
+and then they buy nothing.
+
+**Three-way design.** Total cost is roughly
+
+$$\text{cost} = n\,(c_d + m\,c_c) \quad\text{with reads per cell } r, \tag{44.2}$$
+
+and detection power depends on $n$, $m$ and $r$ jointly: the probability a cell
+type is captured at all,
+
+$$\Pr(\text{cell type observed}) = 1 - (1 - q)^m \tag{44.3}$$
+
+for a type at frequency $q$, and the expression detection probability rising
+with $r$ then saturating. Shallow sequencing of many cells usually beats deep
+sequencing of few, because (44.3) and the $1/(nm)$ term both improve.[^scpower]
+
+**The estimand decides the design.** Power for differential expression
+**between donors** is governed by $n$; power to *find* a rare cell type is
+governed by $m$; power to quantify a lowly expressed gene within a cell is
+governed by $r$. These are different questions with different optima, and a
+design optimal for one can be poor for another.
+
+### Decision rules
+
+1. Name the estimand first, then optimise. "More cells" is not an aim.
+2. For between-condition inference, donors dominate. For discovery of rare
+   populations, cells dominate.
+3. Compute (44.3) before assuming a rare type will appear.
+4. Simulate the actual analysis pipeline under the proposed design, rather than
+   using a closed-form power formula that does not match it.
+
+## Topic 45: Longitudinal and time-varying causal inference
+
+**Module:** `45_longitudinal_causal`
+
+### The question
+
+Treatment changes over time, and the thing that drives the next treatment
+decision is also affected by the last one. Standard adjustment fails here in a
+way that no amount of covariates fixes.
+
+### Key equations
+
+**The time-varying confounding structure.** With treatment $A_t$, confounder
+$L_t$ and outcome $Y$:
+
+$$A_0 \rightarrow L_1 \rightarrow A_1 \rightarrow Y, \qquad L_1 \rightarrow Y, \qquad A_0 \rightarrow Y. \tag{45.1}$$
+
+$L_1$ is simultaneously a **confounder** of the $A_1 \to Y$ relationship and a
+**mediator** of the $A_0 \to Y$ relationship. Adjusting for it blocks part of
+the effect of $A_0$; not adjusting leaves $A_1$ confounded. No single regression
+can do both, which is the entire motivation for g-methods.
+
+**Marginal structural model.** Model the counterfactual mean under a treatment
+history $\bar{a}$,
+
+$$\mathbb{E}[Y^{\bar{a}}] = \beta_0 + \beta_1 \operatorname{cum}(\bar{a}), \tag{45.2}$$
+
+and fit it by weighting each subject by the stabilised inverse probability of
+their own observed treatment history,
+
+$$SW_i = \prod_{t=0}^{T} \frac{\Pr(A_t = a_{it} \mid \bar{A}_{t-1})}{\Pr(A_t = a_{it} \mid \bar{A}_{t-1}, \bar{L}_t)}. \tag{45.3}$$
+
+The weights create a pseudo-population in which $L_t$ no longer predicts $A_t$,
+so the confounding is removed without conditioning on the mediator.
+
+Weights multiply across time, so they grow unstable quickly. Report the weight
+distribution, and truncate with a stated rule.
+
+**Multi-state models.** Generalise survival to several states with transition
+intensities
+
+$$\lambda_{gh}(t) = \lim_{\Delta \to 0} \frac{\Pr(X_{t+\Delta} = h \mid X_t = g)}{\Delta}, \tag{45.4}$$
+
+and transition probabilities from the Aalen-Johansen estimator, the matrix
+generalisation of Kaplan-Meier. Competing risks (Topic 28) is the special case
+with absorbing states and no recovery.
+
+### Decision rules
+
+1. Treatment measured repeatedly plus a confounder affected by prior treatment
+   $\rightarrow$ g-methods, not regression adjustment.
+2. Always report the stabilised weight distribution and any truncation.
+3. Illness-death and recovery processes $\rightarrow$ multi-state, not a
+   sequence of separate survival models.
+4. As ever, none of this addresses unmeasured confounding.
+
+## Topic 46: Model interpretation and pretrained models
+
+**Module:** `46_interpretation_and_foundation_models`
+
+### The question
+
+The model predicts well. What is it using, and can you believe the explanation?
+
+### Key equations
+
+**Permutation importance.** Break the association between feature $j$ and the
+outcome by shuffling it, and measure the loss increase:
+
+$$\text{PI}_j = \mathbb{E}\big[L(y, \hat f(x^{(j\text{-perm})}))\big] - \mathbb{E}\big[L(y, \hat f(x))\big]. \tag{46.1}$$
+
+**Shapley values.** Distribute the prediction across features by averaging each
+feature's marginal contribution over all orderings:
+
+$$\phi_j = \sum_{S \subseteq F \setminus \{j\}}
+  \frac{|S|!\,(|F|-|S|-1)!}{|F|!}\,\big[v(S \cup \{j\}) - v(S)\big], \tag{46.2}$$
+
+with the additivity property
+
+$$\hat f(x) = \phi_0 + \sum_{j} \phi_j. \tag{46.3}$$
+
+**Where both fail.** With correlated features, (46.1) evaluates the model at
+input combinations that never occur, so the importance reported is the
+behaviour of the model off the data manifold rather than on it. Correlated
+features also **split** their credit: two copies of the same informative
+variable each look half as important as either alone, and a genuinely important
+feature can therefore appear unimportant. This is the same instability that
+makes lasso selection arbitrary under collinearity (Topic 31).
+
+An explanation is a statement about the **model**, not about biology. A feature
+can be important to a model because it proxies batch.
+
+**Evaluation of pretrained models.** When a model has been pretrained on a
+large public corpus, the usual train/test split no longer bounds optimism,
+because your test set may be inside the pretraining data. The relevant checks
+are: whether your evaluation samples appear in the pretraining corpus; whether
+the reported gain survives against a simple baseline on the same splits; and
+whether the embedding separates batch rather than biology. Report the baseline.
+A large model that does not beat a linear model on pseudobulk has not been
+shown to be useful.
+
+### Decision rules
+
+1. Report importance with a stated method and its assumptions; they disagree.
+2. Under correlated features, interpret groups rather than individual features.
+3. An explanation describes the model. Validate the claim experimentally before
+   calling it biology.
+4. For pretrained models, state the pretraining corpus and check for overlap
+   with the evaluation data. Always report a simple baseline.
+
 # Appendix A: Distribution reference sheet
 
 | Distribution | Support | PMF / PDF | Mean | Variance | Bioinformatics use |
@@ -4844,6 +5564,11 @@ $$n \approx \frac{16}{d^2} \ \text{per group}
 [^cyt2]: Nowicka M, et al. (2019). CyTOF workflow: differential discovery in high-throughput high-dimensional cytometry datasets. *F1000Research* 6:748.
 [^meth1]: Phipson B, Maksimovic J, Oshlack A (2016). missMethyl: an R package for analyzing data from Illumina's HumanMethylation450 platform. *Bioinformatics* 32(2):286-288.
 [^meth2]: Maksimovic J, Phipson B, Oshlack A (2017). A cross-package Bioconductor workflow for analysing methylation array data. *F1000Research* 5:1281.
+[^ihw]: Ignatiadis N, Klaus B, Zaugg JB, Huber W (2016). Data-driven hypothesis weighting increases detection power in genome-scale multiple testing. *Nature Methods* 13:577-580.
+[^ebh]: Wang R, Ramdas A (2022). False discovery rate control with e-values. *Journal of the Royal Statistical Society B* 84(3):822-852.
+[^knock]: Barber RF, Candes EJ (2015). Controlling the false discovery rate via knockoffs. *Annals of Statistics* 43(5):2055-2085. Ren Z, Barber RF (2024). Derandomised knockoffs. *JRSS B* 86(1):122-154.
+[^ademp]: Morris TP, White IR, Crowther MJ (2019). Using simulation studies to evaluate statistical methods. *Statistics in Medicine* 38(11):2074-2102.
+[^scpower]: Schmid KT, et al. (2021). scPower accelerates and optimizes the design of multi-sample single cell transcriptomic studies. *Nature Communications* 12:6625.
 [^mm1]: Du P, Zhang X, Huang CC, Jafari N, Kibbe WA, Hou L, Lin SM (2010). Comparison of Beta-value and M-value methods for quantifying methylation levels by microarray analysis. *BMC Bioinformatics* 11:587.
 [^gwas1]: Uffelmann E, et al. (2021). Genome-wide association studies. *Nature Reviews Methods Primers* 1:59.
 [^prot1]: Zhang X, et al. (2018). Proteome-wide identification of ubiquitin interactions using UbIA-MS (DEP). *Nature Protocols* 13:530-550.

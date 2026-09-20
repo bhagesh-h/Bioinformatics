@@ -40,14 +40,14 @@ each other. Open it locally, or publish it with GitHub Pages
 
 | Component | Count | What it is |
 |---|---|---|
-| `stats.md` | Part 0 + 35 topics, 305 numbered equations | The mathematical companion. **Part 0 starts from zero and assumes no maths at all**; Topics 1-35 are the full treatment |
+| `stats.md` | Part 0 + 46 topics, 346 numbered equations | The mathematical companion. **Part 0 starts from zero and assumes no maths at all**; Topics 1-46 are the full treatment |
 | `statsPy/foundations/`, `statsR/foundations/` | 6 modules each | Statistics from scratch for absolute beginners: variables, probability, distributions, standard errors, p-values, causal roles |
-| `statsPy/core/`, `statsR/core/` | 25 modules each | Statistical foundations, from study design to reproducibility |
-| `statsPy/bioinformatics/`, `statsR/bioinformatics/` | 11 modules each | Applied analyses: RNA-seq, single-cell, methylation, GWAS, proteomics, microbiome, spatial, survival, enrichment, networks |
+| `statsPy/core/`, `statsR/core/` | 30 modules each | Statistical foundations, from study design to reproducibility, then modern multiple testing, measurement error, meta-analysis, conformal prediction and simulation design |
+| `statsPy/bioinformatics/`, `statsR/bioinformatics/` | 17 modules each | Applied analyses: RNA-seq, single-cell, methylation, GWAS, proteomics, microbiome, spatial, survival, enrichment, networks, trajectories, deconvolution, statistical genetics, omics design, longitudinal causal inference, interpretability |
 | `statsPy/exercises/`, `statsR/exercises/` | 4 exercises each | Integrative problem sets combining several topics, with full worked solutions |
-| `statsPy/notebooks/`, `statsR/notebooks/` | 46 each | Generated `.ipynb` / `.Rmd` views of every script |
-| `tools/` | 7 scripts | Test runners, solution checker, notebook builder, site builder, fast doc checks |
-| `docs/` | 1 page | A single-page map of all 46 modules and their dependencies, for GitHub Pages |
+| `statsPy/notebooks/`, `statsR/notebooks/` | 57 each | Generated `.ipynb` / `.Rmd` views of every script |
+| `tools/` | 8 scripts | Test runners, solution checker, notebook builder, site builder, fast doc checks, public-dataset fetcher (`fetch_data.py`, see [`data/README.md`](data/README.md)) |
+| `docs/` | 1 page | A single-page map of all 57 modules and their dependencies, for GitHub Pages |
 | `env/`, `docker/` | - | Pinned environment manifests and Dockerfiles |
 
 The R and Python tracks are **parallel but not identical**. They cover the same
@@ -119,16 +119,16 @@ runr  statsR/core/08_multiple_testing.R
 |
 +-- statsPy/                       -- PYTHON TRACK --------------------------
 |   +-- foundations/               6 beginner modules       (F1 ... F6)
-|   +-- core/                      25 statistics modules    (00 ... 24)
-|   +-- bioinformatics/            11 applied modules       (30 ... 40)
+|   +-- core/                      30 statistics modules    (00 ... 29)
+|   +-- bioinformatics/            17 applied modules       (30 ... 46)
 |   +-- exercises/                 4 integrative problem sets (E1 ... E4)
 |   \-- notebooks/                 generated .ipynb, mirroring the above
 |       +-- foundations/  core/  bioinformatics/  exercises/
 |
 +-- statsR/                        -- R TRACK -------------------------------
 |   +-- foundations/               6 beginner modules       (F1 ... F6)
-|   +-- core/                      25 statistics modules    (00 ... 24)
-|   +-- bioinformatics/            11 applied modules       (30 ... 40)
+|   +-- core/                      30 statistics modules    (00 ... 29)
+|   +-- bioinformatics/            17 applied modules       (30 ... 46)
 |   +-- exercises/                 4 integrative problem sets (E1 ... E4)
 |   \-- notebooks/                 generated .Rmd, mirroring the above
 |       +-- foundations/  core/  bioinformatics/  exercises/
@@ -167,12 +167,12 @@ runr  statsR/core/08_multiple_testing.R
 | Pattern | Meaning |
 |---|---|
 | `F1`-`F6` | foundations - statistics from zero, no prerequisites |
-| `00`-`24` | core statistics, in teaching order - later modules assume earlier ones |
-| `30`-`40` | applied bioinformatics, each mapping to one assay or question |
+| `00`-`29` | core statistics, in teaching order - later modules assume earlier ones |
+| `30`-`46` | applied bioinformatics, each mapping to one assay or question |
 | `E1`-`E4` | integrative exercises that combine several modules |
 
-The gap between 24 and 30 is deliberate: it leaves room for core modules
-without renumbering the applied ones.
+The gap between 29 and 30 is deliberate: it leaves room for further core
+modules without renumbering the applied ones.
 
 
 ## 5. The four kinds of file
@@ -259,7 +259,9 @@ same ideas, verified by simulation, before the biology is layered on.
 | Models | `10`-`15` | - |
 | High-dimensional | `16`-`19` | - |
 | Inference and validation | `20`-`24` | `E3` (prediction audit), `E4` (causal) |
+| Modern methods | `25`-`29` | - |
 | Applied | `30`-`40` | `E2` (RNA-seq end to end) |
+| Advanced applied | `41`-`46` | - |
 
 If you are here for one assay, read `01`, `08`, `13` and `19` first - those
 four cover the mistakes that actually invalidate published analyses - then go
@@ -362,6 +364,11 @@ No prerequisites. Read alongside **Part 0** of `stats.md`.
 | 22 | `causal_inference` | 32 |
 | 23 | `bayesian_and_shrinkage` | 33 |
 | 24 | `diagnostics_and_reproducibility` | 34, 35 |
+| 25 | `modern_multiple_testing` | 36 |
+| 26 | `measurement_error_and_regression` | 37 |
+| 27 | `meta_analysis` | 38 |
+| 28 | `conformal_prediction` | 39 |
+| 29 | `simulation_and_benchmarking` | 40 |
 
 ### Applied: `statsPy/bioinformatics/`, `statsR/bioinformatics/`
 
@@ -378,6 +385,12 @@ No prerequisites. Read alongside **Part 0** of `stats.md`.
 | 38 | `survival_biomarkers` | 28 | events, not patients; never dichotomise on a data-chosen cut-point |
 | 39 | `gene_set_enrichment` | 29 | genes in a pathway are correlated |
 | 40 | `networks_and_multiomics` | 30 | correlation networks find modules in pure noise |
+| 41 | `trajectory_and_pseudotime` | 41 | the pseudotime was computed from the genes you test against it |
+| 42 | `deconvolution_and_integration` | 42 | collinear cell types; over-correction; zero-inflation that is not there |
+| 43 | `advanced_statistical_genetics` | 43 | the lead SNP is usually not the causal one |
+| 44 | `power_and_design_for_omics` | 44 | the estimand decides the design, and the same budget gives different optima |
+| 45 | `longitudinal_causal` | 45 | one covariate is a confounder and a mediator at once |
+| 46 | `interpretation_and_foundation_models` | 46 | the top feature can be a pure batch proxy |
 
 ### Exercises: `statsPy/exercises/`, `statsR/exercises/`
 
@@ -392,13 +405,13 @@ No prerequisites. Read alongside **Part 0** of `stats.md`.
 ## 9. Running the tests
 
 ```bash
-bash tools/run_python_tests.sh                 # all 46 Python modules
+bash tools/run_python_tests.sh                 # all 57 Python modules
 bash tools/run_python_tests.sh foundations
 bash tools/run_python_tests.sh core            # only statsPy/core
 bash tools/run_python_tests.sh bioinformatics
 bash tools/run_python_tests.sh exercises
 
-bash tools/run_r_tests.sh                      # all 46 R modules
+bash tools/run_r_tests.sh                      # all 57 R modules
 bash tools/run_r_tests.sh core
 ```
 
@@ -542,7 +555,7 @@ matched to it tells you what that answer can and cannot support.
 
 ## 14. The interactive diagram
 
-`docs/index.html` is a single page showing all 46 modules as a dependency
+`docs/index.html` is a single page showing all 57 modules as a dependency
 diagram: four columns for the four tracks, dashed edges for reading order,
 solid edges for declared dependencies. Point at a module to trace everything it
 needs and everything that needs it.

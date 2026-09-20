@@ -300,11 +300,27 @@ def impute_mnar(P, shift=1.8, width=0.3, seed=0):
     """MinProb / Perseus-style: draw from a DOWN-SHIFTED normal."""
     rng = np.random.default_rng(seed)
     out = P.copy()
+    # A column with fewer than two observed values has no usable SD, and a
+    # subset of rows (as impute_mixed passes) can easily produce one. Fall back
+    # to the matrix-wide spread so every cell is imputed; leaving it NaN would
+    # silently drop the protein from the comparison below.
+    g_sd = float(np.nanstd(P.to_numpy(dtype=float), ddof=1))
+    g_mu = float(np.nanmean(P.to_numpy(dtype=float)))
+    if not np.isfinite(g_sd) or g_sd == 0:
+        g_sd = 1.0
+    if not np.isfinite(g_mu):
+        g_mu = 0.0
     for s in P.columns:
         col = P[s]
-        mu = col.mean() - shift * col.std()
-        out[s] = col.fillna(pd.Series(rng.normal(mu, width * col.std(), len(col)),
-                                      index=col.index))
+        sd_ = col.std()
+        if not np.isfinite(sd_) or sd_ == 0:
+            sd_ = g_sd
+        mu_ = col.mean()
+        if not np.isfinite(mu_):
+            mu_ = g_mu
+        draws = pd.Series(rng.normal(mu_ - shift * sd_, width * sd_, len(col)),
+                          index=col.index)
+        out[s] = col.fillna(draws)
     return out
 
 

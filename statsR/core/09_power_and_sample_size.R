@@ -87,6 +87,22 @@ for (rho in c(0.01, 0.05, 0.20)) for (m in c(10, 100)) {
   cat(sprintf("    rho=%.2f, m=%3d obs/cluster: DE=%6.2f -> %8.0f obs = %6.1f clusters\n",
               rho, m, de, n_indep * de, n_indep * de / m))
 }
+cat("
+  Read the CLUSTERS column, not the observations column. Two things follow.
+
+  A design needing \"1.2 clusters\" is not a design. The degrees of freedom for
+  a cluster-randomised comparison come from the number of CLUSTERS, not the
+  number of observations, so a study with one or two clusters per arm has no
+  usable inference however many observations sit inside them. Treat any row
+  below roughly 8 clusters per arm as telling you the design is infeasible
+  rather than cheap.
+
+  Adding observations per cluster has a ceiling. As m grows, DE grows with it,
+  so the required cluster count tends to n_indep * rho and stops falling: at
+  rho = 0.20 you need about 13 clusters whether each holds 10 observations or
+  100. Beyond that point only more CLUSTERS buy power. This is eq. (1.5)'s
+  variance floor in design units, and Module 44 locates the same plateau for
+  cells per donor.\n")
 
 #' ## 4. More donors or more cells? Equation (9.7)
 

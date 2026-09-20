@@ -311,10 +311,55 @@ print(f"\n  {'analysis':<44}{'rej':>7}{'TP':>7}{'FP':>7}{'sens':>10}{'FDP':>8}")
 evaluate(de_test(Y2, meta2), truth2, "ignore the hidden batch")
 evaluate(de_with_sv(Y2, bio2.ravel(), SV), truth2, "adjust for 1 surrogate variable")
 evaluate(de_adjusted(Y2, meta2), truth2, "adjust for the TRUE batch (oracle)")
-print("\n  The surrogate variable recovers most of what knowing the true batch")
-print("  would have given. RUV is the alternative, using negative-control")
-print("  features (eq. 19.6) - valid only if those controls really are")
-print("  unaffected by the biology, which is an assumption to defend.")
+# Is the SV-adjusted test actually calibrated? Check the p-values of the
+# features we KNOW are null - the only way to see this.
+def null_rate(X):
+    coef, *_ = np.linalg.lstsq(X, Y2.T, rcond=None)
+    resid = Y2.T - X @ coef
+    dof = Y2.shape[1] - X.shape[1]
+    s2 = (resid ** 2).sum(axis=0) / dof
+    se = np.sqrt(s2 * np.linalg.inv(X.T @ X)[1, 1])
+    p = 2 * st.t.sf(np.abs(coef[1] / se), dof)
+    return np.mean(p[~truth2] < 0.05)
+
+
+X_sv = np.column_stack([np.ones(len(bio2.ravel())), bio2.ravel(), SV])
+X_or = np.column_stack([np.ones(len(bio2.ravel())), bio2.ravel(), hidden])
+print(f"\n  among features that are truly NULL, rate of p < 0.05:")
+print(f"    adjusting for the surrogate variable : {null_rate(X_sv):.3f}"
+      f"   <- should be 0.05")
+print(f"    adjusting for the TRUE batch (oracle): {null_rate(X_or):.3f}")
+print(f"    corr(SV1, biology) = "
+      f"{abs(np.corrcoef(SV[:, 0], bio2.ravel())[0, 1]):.4f}"
+      f"   (so it is NOT stealing signal)")
+
+print("""
+  READ THE FDP COLUMN, NOT THE SENSITIVITY COLUMN. The surrogate variable
+  recovers the oracle's sensitivity and destroys its error control: the
+  realised FDP is many times nominal, and the null p-values are far from
+  uniform.
+
+  The mechanism is not that the SV absorbed the biology - the correlation
+  above is essentially zero. It is that the SV was ESTIMATED from these very
+  residuals, as their leading component, and then used as though it were a
+  known covariate. For each gene it therefore removes more variance than a
+  fixed covariate would, the residual variance is too small, and every t
+  statistic is too large.
+
+  This is section 4's lesson again in a new costume: a quantity you ESTIMATED
+  from the data carries uncertainty, and plugging it in as if it were observed
+  throws that uncertainty away. There it was the corrected matrix; here it is
+  the surrogate variable.
+
+  What to do instead: use an implementation that accounts for the estimation
+  (sva's iterative reweighting, or carrying the SVs through a framework that
+  adjusts the residual degrees of freedom), decide the number of SVs by a
+  principled rule rather than by eye, and always check the null calibration on
+  features you believe are unaffected.
+
+  RUV is the alternative, using negative-control features (eq. 19.6) - valid
+  only if those controls really are unaffected by the biology, which is an
+  assumption to defend.""")
 
 # %% [markdown]
 # ## 6. The two-sided diagnostic

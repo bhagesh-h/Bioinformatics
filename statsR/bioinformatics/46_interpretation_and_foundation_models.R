@@ -1,0 +1,581 @@
+#' ---
+#' title: "Applied 46 - Model interpretation and pretrained models"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 46, equations (46.1)-(46.3)
+#' **Core modules used:** 19, 21, 28, 31
+#'
+#' ## The question
+#'
+#' The model predicts well. What is it using, can you believe the explanation,
+#' and what changes when the model was pretrained on data you did not control?
+#'
+#' ## The claim to keep in mind
+#'
+#' An explanation is a statement about the **model**, not about biology. A
+#' feature can be important to a model because it proxies batch.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages(library(rpart))
+MODULE_NAME <- "46_interpretation_and_foundation_models"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(46)
+
+#' Python's module uses scikit-learn's random forest. R's base image has no
+#' such package, so we build the same thing directly: bag regression trees,
+#' and let each tree see a random subset of `mtry` features. That subset size
+#' turns out to matter in section 2b.
+rf_fit <- function(X, y, ntree = 120, mtry = max(1, floor(ncol(X) / 3)),
+                   minsplit = 10) {
+  n <- nrow(X)
+  lapply(seq_len(ntree), function(b) {
+    idx <- sample(n, n, replace = TRUE)
+    cols <- sample(ncol(X), mtry)
+    df <- data.frame(y = y[idx], X[idx, cols, drop = FALSE])
+    list(tree = rpart(y ~ ., data = df, method = "anova",
+                      control = rpart.control(minsplit = minsplit, cp = 0.001)),
+         cols = cols)
+  })
+}
+rf_pred <- function(fit, X) {
+  rowMeans(sapply(fit, function(b) {
+    df <- data.frame(X[, b$cols, drop = FALSE])
+    predict(b$tree, df)
+  }))
+}
+mse <- function(a, b) mean((a - b)^2)
+
+#' ## 1. Permutation importance, eq. (46.1)
+#'
+#' $$I_j=\mathbb{E}\big[L(y,f(X^{\pi_j}))\big]-L(y,f(X)) \qquad (46.1)$$
+
+#+ perm-importance
+header("1. Permutation importance on independent features (46.1)")
+#' Eq. (46.1): the loss increase when feature j is shuffled.
+perm_importance <- function(predict_fn, X, y, metric = mse, n_rep = 8,
+                            seed = 0) {
+  set.seed(seed)
+  base <- metric(y, predict_fn(X))
+  sapply(seq_len(ncol(X)), function(j) {
+    v <- replicate(n_rep, {
+      Xp <- X; Xp[, j] <- sample(Xp[, j]); metric(y, predict_fn(Xp))
+    })
+    mean(v) - base
+  })
+}
+n <- 1200; p <- 8
+X <- matrix(rnorm(n * p), n)
+beta <- c(2.0, 1.0, 0.5, 0, 0, 0, 0, 0)
+y <- as.vector(X %*% beta) + rnorm(n)
+# mtry = p: every split may consider every feature. Section 2b shows why
+# this choice is not innocent once the features are correlated.
+fit <- rf_fit(X, y, mtry = p)
+pi_ <- perm_importance(function(Z) rf_pred(fit, Z), X, y)
+cat(sprintf("  %-10s%11s%18s\n", "feature", "true beta", "perm importance"))
+for (j in 1:p)
+  cat(sprintf("  %-10d%11.1f%18.4f\n", j, beta[j], pi_[j]))
+cat("\n  With independent features, permutation importance recovers the truth:
+  the ranking matches the coefficients and the null features sit near zero.
+
+  Everything from here is about what happens when that independence fails,
+  which in omics data it always does.\n")
+
+#' ## 2. Correlated features split the credit
+
+#+ correlated
+header("2. Correlated features split the credit")
+cat("  Case A: x1 CAUSES y, and x2 is a noisy copy of x1 with no effect of its own.\n\n")
+cat(sprintf("  %-14s%13s%13s%11s\n", "corr(x1,x2)", "x1 (causal)",
+            "x2 (a copy)", "x2 share"))
+for (rho in c(0.0, 0.5, 0.8, 0.95, 0.99)) {
+  set.seed(7)
+  x1 <- rnorm(n)
+  x2 <- rho * x1 + sqrt(max(1 - rho^2, 1e-9)) * rnorm(n)
+  Xc <- cbind(x1, x2, matrix(rnorm(n * 3), n))
+  yc <- 2.0 * x1 + rnorm(n)
+  fc <- rf_fit(Xc, yc, mtry = 2)
+  p_ <- perm_importance(function(Z) rf_pred(fc, Z), Xc, yc, seed = 2)
+  cat(sprintf("  %-14.2f%13.3f%13.3f%10.1f%%\n", rho, p_[1], p_[2],
+              100 * p_[2] / (p_[1] + p_[2])))
+}
+cat("\n  Here the leak is mild. Even at correlation 0.99, x1 keeps most of the
+  credit, because it is the genuine cause and therefore splits the data
+  slightly better than its copy does.
+
+  Case B is the one that matters in omics. Neither measured feature is the
+  cause: both are noisy readouts of a latent driver z, the way two
+  co-expressed genes are both readouts of one transcription factor.\n\n")
+cat(sprintf("  %-14s%13s%9s%9s%11s\n", "proxy noise", "corr(x1,x2)", "x1",
+            "x2", "x1 share"))
+for (tau in c(2.0, 1.0, 0.5, 0.2, 0.05)) {
+  set.seed(11)
+  z <- rnorm(n)
+  x1 <- z + rnorm(n, 0, tau); x2 <- z + rnorm(n, 0, tau)
+  Xc <- cbind(x1, x2, matrix(rnorm(n * 3), n))
+  yc <- 2.0 * z + rnorm(n)
+  fc <- rf_fit(Xc, yc, mtry = 2)
+  p_ <- perm_importance(function(Z) rf_pred(fc, Z), Xc, yc, seed = 2)
+  cat(sprintf("  %-14.2f%13.2f%9.3f%9.3f%10.1f%%\n", tau, cor(x1, x2), p_[1],
+              p_[2], 100 * p_[1] / (p_[1] + p_[2])))
+}
+cat("\n  The credit splits close to half at every noise level, and each
+  feature alone looks about half as important as the pair really is.
+
+  Two consequences. A gene downstream of a real driver can look unimportant
+  because a co-expressed gene absorbs half its credit. And \"gene X was the top
+  feature\" is close to a coin flip between the two: Problem 2 measures how
+  close.
+
+  Report importance for CORRELATED GROUPS, not individual features, or cluster
+  the features first and permute whole clusters.\n")
+
+#+ hyperparameter
+header("2b. The split also depends on a hyperparameter, not on biology")
+cat(sprintf("  %-16s%13s%13s%11s\n", "mtry", "x1 (causal)", "x2 (a copy)",
+            "x2 share"))
+for (mt in c(5, 2)) {
+  set.seed(7)
+  x1 <- rnorm(n)
+  x2 <- 0.95 * x1 + sqrt(1 - 0.95^2) * rnorm(n)
+  Xc <- cbind(x1, x2, matrix(rnorm(n * 3), n))
+  yc <- 2.0 * x1 + rnorm(n)
+  fc <- rf_fit(Xc, yc, mtry = mt)
+  p_ <- perm_importance(function(Z) rf_pred(fc, Z), Xc, yc, seed = 2)
+  cat(sprintf("  %-16s%13.3f%13.3f%10.1f%%\n",
+              if (mt == 5) "5 (all features)" else "2 (a subset)", p_[1],
+              p_[2], 100 * p_[2] / (p_[1] + p_[2])))
+}
+cat("\n  Same data, same correlation, same true effect. When every split
+  considers all features the forest keeps choosing x1, so x2 looks
+  unimportant. When each split sees a random subset, x2 gets used whenever x1
+  is absent and its importance rises.
+
+  The share of credit given to a feature with no effect is therefore partly a
+  function of a tuning parameter. Always state which model and which settings
+  produced an importance ranking.\n")
+
+#' ## 3. Permutation evaluates the model off the data manifold
+
+#+ manifold
+header("3. Shuffling creates samples that could never exist")
+set.seed(4601)
+rho <- 0.95
+z <- rnorm(n)
+x1 <- z; x2 <- rho * z + sqrt(1 - rho^2) * rnorm(n)
+Xm <- cbind(x1, x2)
+Xperm <- Xm; Xperm[, 2] <- sample(Xperm[, 2])
+cat(sprintf("  corr(x1, x2) in the real data      : %.3f\n",
+            cor(Xm[, 1], Xm[, 2])))
+cat(sprintf("  corr(x1, x2) after permuting x2    : %.3f\n",
+            cor(Xperm[, 1], Xperm[, 2])))
+d_real <- abs(Xm[, 1] - Xm[, 2]); d_perm <- abs(Xperm[, 1] - Xperm[, 2])
+cat(sprintf("\n  |x1 - x2| in real data  : median %.2f, 99th pct %.2f\n",
+            median(d_real), quantile(d_real, 0.99)))
+cat(sprintf("  |x1 - x2| after permuting: median %.2f, 99th pct %.2f\n",
+            median(d_perm), quantile(d_perm, 0.99)))
+cat(sprintf("\n  fraction of permuted rows outside the real data's 99th percentile: %.1f%%\n",
+            100 * mean(d_perm > quantile(d_real, 0.99))))
+cat("\n  Permuting breaks the correlation, so a large share of the rows the
+  model is asked to score are combinations that never occur in nature: a high
+  x1 with a low x2 when the two are 95% correlated.
+
+  The importance you get is therefore partly a measurement of the model's
+  behaviour in a region where it was never trained and where its output is
+  arbitrary. Conditional or grouped permutation schemes exist for this
+  reason.\n")
+
+#' ## 4. Shapley values, eq. (46.2)-(46.3)
+#'
+#' $$\phi_j=\sum_{S\subseteq F\setminus\{j\}}
+#'   \frac{|S|!(|F|-|S|-1)!}{|F|!}\big[v(S\cup\{j\})-v(S)\big] \qquad (46.2)$$
+#' $$f(x)=v(\emptyset)+\sum_j \phi_j \qquad (46.3)$$
+
+#+ shapley
+header("4. Exact Shapley values on a small model (46.2)-(46.3)")
+#' Eq. (46.2) by full enumeration over orderings. Feasible only for a handful
+#' of features, which is why real implementations approximate.
+shapley_exact <- function(predict_fn, x, background) {
+  k <- length(x)
+  perms <- as.matrix(expand.grid(rep(list(seq_len(k)), k)))
+  perms <- perms[apply(perms, 1, function(r) length(unique(r)) == k), ,
+                 drop = FALSE]
+  phi <- numeric(k)
+  for (i in seq_len(nrow(perms))) {
+    present <- integer(0)
+    prev <- predict_fn(background)
+    for (j in perms[i, ]) {
+      present <- c(present, j)
+      xx <- background; xx[, present] <- x[present]
+      cur <- predict_fn(xx)
+      phi[j] <- phi[j] + cur - prev
+      prev <- cur
+    }
+  }
+  phi / nrow(perms)
+}
+set.seed(4602)
+Xs <- matrix(rnorm(800 * 4), 800)
+colnames(Xs) <- paste0("V", 1:4)
+ys <- 1.5 * Xs[, 1] - 1.0 * Xs[, 2] + 0.0 * Xs[, 3] + 0.5 * Xs[, 4] +
+  rnorm(800, 0, 0.5)
+ridge <- lm(ys ~ Xs)
+pred_lin <- function(A) {
+  A <- matrix(A, ncol = 4); colnames(A) <- colnames(Xs)
+  as.vector(cbind(1, A) %*% coef(ridge))
+}
+bg <- matrix(colMeans(Xs), nrow = 1)
+target <- Xs[1, ]
+phi <- shapley_exact(pred_lin, target, bg)
+cat(sprintf("  %-10s%13s%10s%14s\n", "feature", "coefficient", "x value",
+            "Shapley phi"))
+for (j in 1:4)
+  cat(sprintf("  %-10d%13.3f%10.3f%14.4f\n", j, coef(ridge)[j + 1],
+              target[j], phi[j]))
+cat("\n  additivity check, eq. (46.3):\n")
+cat(sprintf("    baseline + sum(phi) = %.4f\n", pred_lin(bg) + sum(phi)))
+cat(sprintf("    model prediction    = %.4f\n",
+            pred_lin(matrix(target, nrow = 1))))
+cat("\n  For a linear model the Shapley value of feature j is simply
+  coefficient x (value minus baseline), and the additivity property (46.3)
+  holds exactly.
+
+  That transparency is why Shapley values are attractive. It is also why they
+  are over-trusted: additivity is a mathematical property of the attribution,
+  not evidence that the model captured a real mechanism.\n")
+
+#' ## 5. An explanation can be entirely about batch
+
+#+ batch-proxy
+header("5. The most important feature is a batch proxy")
+set.seed(21)
+n_s <- 600; n_g <- 40
+y_out <- sample(0:1, n_s, replace = TRUE)
+# A confounded design: 85% of cases were processed in batch 1, 85% of
+# controls in batch 0. Nobody planned it; it is how the samples arrived.
+FRAC <- 0.85
+batch <- as.numeric(runif(n_s) < ifelse(y_out == 1, FRAC, 1 - FRAC))
+bio <- rnorm(n_s) + 1.0 * y_out              # a genuinely causal gene
+G <- matrix(rnorm(n_s * n_g), n_s)
+G[, 1] <- bio
+G[, 2] <- 3.0 * batch + rnorm(n_s, 0, 0.3)   # a purely batch-driven gene
+auc <- function(lab, score) {
+  r <- rank(score)
+  n1 <- sum(lab == 1); n0 <- sum(lab == 0)
+  (sum(r[lab == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+#' Importance is computed on HELD-OUT data. A bagged ensemble interpolates its
+#' training set, so its in-sample AUC is 1.000 and permuting any feature leaves
+#' it at 1.000: in-sample permutation importance measures nothing here.
+set.seed(99)
+tr <- sample(n_s, n_s * 0.6); te <- setdiff(seq_len(n_s), tr)
+fit2 <- rf_fit(G[tr, ], y_out[tr], ntree = 150, mtry = 7)
+pi2 <- perm_importance(function(Z) rf_pred(fit2, Z), G[te, ], y_out[te],
+                       metric = function(a, b) -auc(a, b), n_rep = 6, seed = 7)
+top <- order(pi2, decreasing = TRUE)[1:4]
+cat(sprintf("  held-out AUC of the model: %.3f\n",
+            auc(y_out[te], rf_pred(fit2, G[te, ]))))
+cat(sprintf("  confounding: corr(batch, outcome) = %.2f\n\n",
+            cor(batch, y_out)))
+cat(sprintf("  %-7s%-10s%13s%26s\n", "rank", "feature", "importance",
+            "what it really is"))
+labels <- c("real biology", "batch proxy")
+for (i in seq_along(top))
+  cat(sprintf("  %-7d%-10d%13.4f%26s\n", i, top[i], pi2[top[i]],
+              if (top[i] <= 2) labels[top[i]] else "noise"))
+cat(sprintf("\n  gene 2 vs batch   : r = %.3f\n", cor(G[, 2], batch)))
+cat(sprintf("  gene 2 vs outcome : r = %.3f\n", cor(G[, 2], y_out)))
+cat("\n  The batch-driven gene is the TOP feature, ahead of the one gene that
+  actually causes the outcome. Its explanation is stable, reproducible, and
+  has a plausible story attached to it as soon as you look up what the gene
+  does.
+
+  Nothing inside the importance calculation can detect this. The defences are
+  all outside the model: check top features against technical metadata
+  (Module 19), design so batch is not confounded with the outcome (Module 01),
+  and validate any claimed mechanism experimentally.\n")
+
+#' ## 6. Evaluating a pretrained model
+
+#+ leakage
+header("6. Pretraining breaks the usual meaning of a test split")
+set.seed(4603)
+n_pat <- 24; cells_per <- 60
+pid <- rep(seq_len(n_pat), each = cells_per)
+pat_effect <- rnorm(n_pat)
+label <- as.numeric(pat_effect > 0)[pid]
+sig <- pat_effect[pid] + rnorm(length(pid), 0, 0.8)
+noise <- matrix(rnorm(length(pid) * 5), length(pid))
+Xp <- cbind(sig, noise)
+# A "pretrained embedding" that saw every patient, including the test ones.
+emb_leaky <- cbind(pat_effect[pid] + rnorm(length(pid), 0, 0.15), noise)
+# An embedding built without the held-out patients would not carry this.
+emb_clean <- cbind(sig, noise)
+#' Grouped cross-validation: whole patients are held out, never single cells.
+grouped_auc <- function(Xd, seed = 0, K = 4) {
+  set.seed(seed)
+  fold_of_pat <- sample(rep_len(seq_len(K), n_pat))
+  pred <- rep(NA_real_, length(label))
+  for (k in seq_len(K)) {
+    te <- fold_of_pat[pid] == k
+    df <- data.frame(y = label[!te], Xd[!te, , drop = FALSE])
+    m <- suppressWarnings(glm(y ~ ., binomial(), df))
+    pred[te] <- predict(m, data.frame(Xd[te, , drop = FALSE]),
+                        type = "response")
+  }
+  ok <- !is.na(pred)
+  auc(label[ok], pred[ok])
+}
+cat(sprintf("  %-46s%16s\n", "representation", "grouped CV AUC"))
+cat(sprintf("  %-46s%16.3f\n", "raw features", grouped_auc(Xp)))
+cat(sprintf("  %-46s%16.3f\n", "embedding built WITHOUT held-out patients",
+            grouped_auc(emb_clean)))
+cat(sprintf("  %-46s%16.3f\n", "embedding that saw every patient (leaky)",
+            grouped_auc(emb_leaky)))
+cat("\n  The clean embedding is deliberately identical to the raw features
+  here. An embedding built without the held-out patients cannot carry
+  information about them beyond what the features already contain, so its row
+  SHOULD match. That is the baseline the leaky row is being compared against.
+
+  The leaky embedding wins, and the cross-validation is grouped correctly by
+  patient. The split is not the problem: the REPRESENTATION already encodes
+  information about the held-out patients, so no downstream split can undo it.
+
+  This is the structural issue when evaluating pretrained models. If your
+  evaluation cohort was part of the pretraining corpus, your held-out AUC is
+  not held out. The questions to ask about any foundation model result:
+
+    1. Was the evaluation data in the pretraining corpus?
+    2. Does it beat a simple baseline on the SAME splits?
+    3. Does the embedding separate batch, or biology?\n")
+
+#+ baseline
+header("6b. Always report the simple baseline")
+cat(sprintf("  %-46s%16.3f\n", "logistic regression on raw features",
+            grouped_auc(Xp, seed = 1)))
+# Pseudobulk baseline: one row per patient.
+pb <- t(sapply(seq_len(n_pat), function(i) colMeans(Xp[pid == i, ])))
+pl <- sapply(seq_len(n_pat), function(i) label[pid == i][1])
+aucs <- sapply(0:4, function(s) {
+  set.seed(s)
+  fold <- sample(rep_len(1:4, n_pat))
+  pr <- rep(NA_real_, n_pat)
+  for (k in 1:4) {
+    te <- fold == k
+    m <- suppressWarnings(glm(y ~ ., binomial(),
+                              data.frame(y = pl[!te], pb[!te, ])))
+    pr[te] <- predict(m, data.frame(pb[te, , drop = FALSE]),
+                      type = "response")
+  }
+  auc(pl, pr)
+})
+cat(sprintf("  %-46s%16.3f\n", "pseudobulk, one row per patient", mean(aucs)))
+cat("\n  The pseudobulk baseline is competitive with every per-cell model
+  here, because the label is a property of the PATIENT and averaging cells
+  removes per-cell noise without discarding anything relevant. Running the
+  comparison per cell instead of per patient also inflates the apparent sample
+  size from 24 to 1440 (Module 01).
+
+  A large model that does not beat a logistic regression on pseudobulk has not
+  been shown to be useful. Report the baseline on the same splits, every
+  time.\n")
+
+#' ## 7. Figure
+
+#+ figure, fig.width = 13, fig.height = 4.5
+png(file.path(OUT, "interpretation.png"), width = 1300, height = 450)
+par(mfrow = c(1, 3), mar = c(4.5, 4.5, 3, 1))
+grid <- c(0.2, 0.5, 0.8, 0.95, 0.99)
+share_copy <- share_proxy <- numeric(length(grid))
+for (i in seq_along(grid)) {
+  rr <- grid[i]
+  set.seed(7)
+  a <- rnorm(n); b <- rr * a + sqrt(max(1 - rr^2, 1e-9)) * rnorm(n)
+  Xc <- cbind(a, b, matrix(rnorm(n * 3), n)); yc <- 2.0 * a + rnorm(n)
+  fc <- rf_fit(Xc, yc, ntree = 80, mtry = 2)
+  pp <- perm_importance(function(Z) rf_pred(fc, Z), Xc, yc, n_rep = 5, seed = 3)
+  share_copy[i] <- pp[2] / (pp[1] + pp[2])
+  tau <- sqrt(max(1 / rr - 1, 1e-9))        # corr(x1,x2) = 1/(1+tau^2)
+  set.seed(11)
+  zz <- rnorm(n); a <- zz + rnorm(n, 0, tau); b <- zz + rnorm(n, 0, tau)
+  Xc <- cbind(a, b, matrix(rnorm(n * 3), n)); yc <- 2.0 * zz + rnorm(n)
+  fc <- rf_fit(Xc, yc, ntree = 80, mtry = 2)
+  pp <- perm_importance(function(Z) rf_pred(fc, Z), Xc, yc, n_rep = 5, seed = 3)
+  share_proxy[i] <- pp[2] / (pp[1] + pp[2])
+}
+plot(grid, share_copy, type = "b", pch = 16, col = "steelblue", lwd = 2,
+     ylim = c(0, 0.7), xlab = "correlation between the two features",
+     ylab = "share of credit given to feature B",
+     main = "Where the credit goes")
+lines(grid, share_proxy, type = "b", pch = 17, col = "firebrick", lwd = 2)
+abline(h = 0.5, lty = 2)
+legend("topleft", c("B is a copy of the cause", "both are proxies"),
+       pch = c(16, 17), lwd = 2, bty = "n", col = c("steelblue", "firebrick"))
+o <- order(pi2, decreasing = TRUE)[1:8]
+barplot(rev(pi2[o]), horiz = TRUE, names.arg = rev(paste("gene", o)),
+        las = 1, cex.names = 0.7, xlab = "importance",
+        col = rev(ifelse(o == 2, "firebrick",
+                         ifelse(o == 1, "steelblue", "grey60"))),
+        main = "Top feature is a pure batch proxy")
+barplot(c(grouped_auc(Xp), grouped_auc(emb_clean), grouped_auc(emb_leaky)),
+        names.arg = c("raw", "clean\nembedding", "leaky\nembedding"),
+        col = c("grey60", "steelblue", "firebrick"), ylim = c(0.4, 1.0),
+        ylab = "grouped CV AUC", xpd = FALSE,
+        main = "Pretraining leakage survives a correct split")
+abline(h = 0.5, lty = 2)
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "interpretation.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: Do the importance methods agree?
+#'
+#' Compare permutation importance against a linear model's coefficients on the
+#' same correlated data.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# set.seed(4610)
+# z <- rnorm(n)
+# Xa <- cbind(z, 0.9 * z + 0.44 * rnorm(n), matrix(rnorm(n * 3), n))
+# ya <- 2.0 * Xa[, 1] + rnorm(n)
+# fa <- rf_fit(Xa, ya, mtry = 2)
+# ri <- lm(ya ~ Xa)
+# pim <- perm_importance(function(Z) rf_pred(fa, Z), Xa, ya, seed = 8)
+# cat(sprintf("  %-10s%8s%14s%13s\n", "feature", "truth", "permutation",
+#             "linear coef"))
+# for (j in 1:5)
+#   cat(sprintf("  %-10d%8.1f%14.4f%13.3f\n", j, if (j == 1) 2.0 else 0.0,
+#               pim[j], coef(ri)[j + 1]))
+# cat(sprintf("\n  rank correlation permutation vs |linear coef|: %.3f\n",
+#             cor(pim, abs(coef(ri)[-1]), method = "spearman")))
+#
+# ## The two methods rank the correlated pair differently, and neither
+# ## recovers "feature 1 matters, feature 2 does not", because the data cannot
+# ## distinguish them. The linear model splits the coefficient between the
+# ## pair; the forest splits the importance.
+# ##
+# ## The practical rule: state which method you used, because the answer
+# ## depends on it, and never present a single importance ranking as though it
+# ## were a property of the biology. Where methods disagree, that disagreement
+# ## is the finding.
+
+#' ### Problem 2: How stable is the top feature?
+#'
+#' Resample the data and record how often the same feature comes top.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# top_counts <- function(kind, par, reps = 25, m = 600) {
+#   tops <- integer(reps)
+#   for (b in seq_len(reps)) {
+#     set.seed(300 + b)
+#     zz <- rnorm(m)
+#     if (kind == "copy") {          # x2 is a copy of the causal x1
+#       a <- zz; bb <- par * zz + sqrt(max(1 - par^2, 1e-9)) * rnorm(m)
+#       tgt <- a
+#     } else {                       # both are proxies of a latent cause
+#       a <- zz + rnorm(m, 0, par); bb <- zz + rnorm(m, 0, par); tgt <- zz
+#     }
+#     xb <- cbind(a, bb, matrix(rnorm(m * 3), m))
+#     yb <- 2.0 * tgt + rnorm(m)
+#     mb <- rf_fit(xb, yb, ntree = 60, mtry = 2)
+#     pb_ <- perm_importance(function(Z) rf_pred(mb, Z), xb, yb, n_rep = 3,
+#                            seed = b)
+#     tops[b] <- which.max(pb_)
+#   }
+#   c(mean(tops == 1), mean(tops == 2), mean(tops > 2))
+# }
+# cat(sprintf("  %-40s%9s%9s%9s\n", "setting", "A top", "B top", "other"))
+# for (z in list(list("copy of the cause, r = 0.00", "copy", 0.0),
+#                list("copy of the cause, r = 0.95", "copy", 0.95),
+#                list("two proxies, low noise (r = 0.96)", "proxy", 0.2),
+#                list("two proxies, high noise (r = 0.51)", "proxy", 1.0))) {
+#   r_ <- top_counts(z[[2]], z[[3]])
+#   cat(sprintf("  %-40s%8.0f%%%8.0f%%%8.0f%%\n", z[[1]], 100 * r_[1],
+#               100 * r_[2], 100 * r_[3]))
+# }
+#
+# ## When one feature is the true cause, it comes top nearly always, even when
+# ## a near-perfect copy sits beside it. When neither feature is the cause and
+# ## both are proxies, which one comes top is much closer to a coin flip.
+# ##
+# ## So "the top predictor was gene X" is a draw from this distribution, and
+# ## how wide the distribution is depends on something you cannot see: whether
+# ## the feature is the driver or a readout of one.
+# ##
+# ## The honest output is a stability measure. Resample, refit, and report how
+# ## often each feature appears in the top k. It costs one loop and is almost
+# ## never done.
+
+#' ### Problem 3: Detect pretraining leakage without seeing the corpus
+#'
+#' You cannot inspect a foundation model's training data. Devise a check that
+#' still reveals contamination.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# ## The signature of leakage: the embedding predicts patient IDENTITY far
+# ## better than raw features do, even for patients it should not know.
+# identity_auc <- function(Xd, seed = 0, K = 3) {
+#   set.seed(seed)
+#   target <- sample(n_pat, 1)
+#   lab <- as.numeric(pid == target)
+#   fold_of_pat <- sample(rep_len(seq_len(K), n_pat))
+#   pred <- rep(NA_real_, length(lab))
+#   for (k in seq_len(K)) {
+#     te <- fold_of_pat[pid] == k
+#     if (sum(lab[!te]) == 0) next
+#     m <- suppressWarnings(glm(y ~ ., binomial(),
+#                               data.frame(y = lab[!te], Xd[!te, ])))
+#     pred[te] <- predict(m, data.frame(Xd[te, , drop = FALSE]),
+#                         type = "response")
+#   }
+#   ok <- !is.na(pred)
+#   if (length(unique(lab[ok])) < 2) return(NA_real_)
+#   auc(lab[ok], pred[ok])
+# }
+# cat(sprintf("  %-44s%18s%18s\n", "representation", "predicts outcome",
+#             "encodes patient"))
+# for (z in list(list("raw features", Xp), list("clean embedding", emb_clean),
+#                list("leaky embedding", emb_leaky))) {
+#   ids <- sapply(0:5, function(s) identity_auc(z[[2]], s))
+#   cat(sprintf("  %-44s%18.3f%18.3f\n", z[[1]], grouped_auc(z[[2]]),
+#               mean(ids, na.rm = TRUE)))
+# }
+#
+# ## The leaky embedding is unusual on BOTH axes: it predicts the outcome
+# ## better and it carries more patient-specific information. That second
+# ## number is the diagnostic, because it can be computed without any access
+# ## to the pretraining corpus.
+# ##
+# ## Other checks in the same spirit: compare performance on cohorts collected
+# ## AFTER the model's training cutoff, which cannot have been included; and
+# ## test whether the embedding clusters by processing site. None of these
+# ## proves contamination, but a model that is unremarkable on all of them is
+# ## much easier to believe.
+
+#' ## What to take away
+#'
+#' 1. Permutation importance (46.1) works on independent features and misleads
+#'    on correlated ones, where credit **splits** between copies.
+#' 2. Permuting evaluates the model **off the data manifold**, in a region
+#'    where its behaviour is arbitrary.
+#' 3. Shapley values (46.2) are exactly additive (46.3). Additivity is a
+#'    property of the attribution, not evidence of a mechanism.
+#' 4. An explanation describes the **model**. The top feature can be a pure
+#'    batch proxy, and no importance method will tell you.
+#' 5. Report **stability**: how often does the same feature come top under
+#'    resampling?
+#' 6. For pretrained models, a correct split does not undo contamination in
+#'    the representation. Ask what was in the corpus, and always report a
+#'    simple baseline on the same splits.
+#'
+#' **This is the final applied module.** See `statsR/exercises/` for the
+#' integrative problem sets.

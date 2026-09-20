@@ -1,0 +1,460 @@
+#' ---
+#' title: "Applied 45 - Longitudinal and time-varying causal inference"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 45, equations (45.1)-(45.4)
+#' **Core modules used:** 14, 20, 22, 38
+#'
+#' ## The question
+#'
+#' Treatment is given repeatedly, and the thing that drives the next treatment
+#' decision is itself affected by the last one. Standard regression fails
+#' here, and it fails in a way no additional covariate repairs.
+#'
+#' ## The structure that breaks everything
+#'
+#' ```
+#'    A0 -----> L1 -----> A1 -----> Y
+#'     \         \                 ^
+#'      \         \________________/
+#'       \________________________/
+#' ```
+#'
+#' `L1` is a **confounder** of `A1 -> Y` and a **mediator** of `A0 -> Y` at
+#' the same time. Adjusting for it blocks part of the effect of `A0`; not
+#' adjusting leaves `A1` confounded. One regression cannot do both.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages(library(survival))
+MODULE_NAME <- "45_longitudinal_causal"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(45)
+TRUE_PER_PERIOD <- -1.0       # effect of one period of treatment on Y
+
+#' ## 1. A two-period study with time-varying confounding, eq. (45.1)
+
+#+ simulate
+header("1. Simulating the structure in eq. (45.1)")
+simulate_study <- function(n = 6000, seed = 0, effect = TRUE_PER_PERIOD) {
+  set.seed(seed)
+  U <- rnorm(n)                             # stable frailty, unobserved
+  L0 <- rnorm(n) + 0.8 * U                  # baseline biomarker
+  A0 <- as.numeric(runif(n) < plogis(0.9 * L0))
+  # L1 responds to treatment AND to frailty: mediator and confounder at once.
+  L1 <- 0.7 * L0 + 0.9 * U - 1.4 * A0 + rnorm(n)
+  A1 <- as.numeric(runif(n) < plogis(0.9 * L1))
+  Y <- effect * (A0 + A1) + 1.1 * U + 0.6 * L1 + rnorm(n)
+  data.frame(U = U, L0 = L0, A0 = A0, L1 = L1, A1 = A1, Y = Y, cum = A0 + A1)
+}
+#' E[Y] if we INTERVENED to set A0=a0 and A1=a1 for everyone.
+#'
+#' This is the estimand. Note it is not simply 2 x the per-period effect: A0
+#' also acts on Y through L1, so its TOTAL effect is larger than its direct
+#' one. Computing the truth by intervention rather than by arithmetic is the
+#' only way to avoid comparing an estimator against the wrong number.
+true_mean <- function(a0, a1, n = 400000, seed = 99,
+                      effect = TRUE_PER_PERIOD) {
+  set.seed(seed)
+  U <- rnorm(n)
+  L0 <- rnorm(n) + 0.8 * U
+  L1 <- 0.7 * L0 + 0.9 * U - 1.4 * a0 + rnorm(n)
+  mean(effect * (a0 + a1) + 1.1 * U + 0.6 * L1 + rnorm(n))
+}
+BASE <- true_mean(0, 0)
+TRUE_A0 <- true_mean(1, 0) - BASE
+TRUE_A1 <- true_mean(0, 1) - BASE
+TRUE_BOTH <- true_mean(1, 1) - BASE
+d <- simulate_study(seed = 1)
+cat(sprintf("  n = %d, direct effect per period = %.1f\n", nrow(d),
+            TRUE_PER_PERIOD))
+cat("\n  TRUE effects, obtained by intervening on the simulation:\n")
+cat(sprintf("    treat at t0 only : %+.3f   (direct %+.2f, plus %+.2f through L1)\n",
+            TRUE_A0, TRUE_PER_PERIOD, -1.4 * 0.6))
+cat(sprintf("    treat at t1 only : %+.3f   (direct only; nothing downstream)\n",
+            TRUE_A1))
+cat(sprintf("    treat in both    : %+.3f\n", TRUE_BOTH))
+cat("\n  The two periods do NOT have the same total effect, because only A0\n")
+cat("  has a mediated path. An MSM with a single 'cumulative treatment'\n")
+cat("  coefficient would be misspecified here.\n")
+cat(sprintf("  treated at t0: %.1f%%; treated at t1: %.1f%%\n",
+            100 * mean(d$A0), 100 * mean(d$A1)))
+cat("\n  L1 is caused by A0 (coefficient -1.4) and predicts A1:\n")
+cat(sprintf("    mean L1 | A0=0 : %+.3f\n", mean(d$L1[d$A0 == 0])))
+cat(sprintf("    mean L1 | A0=1 : %+.3f\n", mean(d$L1[d$A0 == 1])))
+cat(sprintf("    corr(L1, A1)   : %+.3f\n", cor(d$L1, d$A1)))
+cat("\n  Treatment at t0 lowers the biomarker, and a low biomarker makes
+  treatment at t1 less likely. So L1 sits on the causal path from A0 to Y and
+  simultaneously confounds A1.\n")
+
+#' ## 2. Why no single regression works
+
+#+ regressions
+header("2. Adjust for L1, or do not: both are wrong")
+models <- list("Y ~ cum (no adjustment)" = Y ~ cum,
+               "Y ~ cum + L0" = Y ~ cum + L0,
+               "Y ~ cum + L0 + L1 (adjust the mediator)" = Y ~ cum + L0 + L1,
+               "Y ~ cum + L0 + L1 + U (impossible)" = Y ~ cum + L0 + L1 + U)
+cat(sprintf("  true effect of treatment in BOTH periods = %.3f\n\n", TRUE_BOTH))
+cat(sprintf("  %-44s%11s%9s\n", "model", "estimate", "bias"))
+for (nm in names(models)) {
+  b <- coef(lm(models[[nm]], data = d))[["cum"]] * 2
+  cat(sprintf("  %-44s%11.3f%9.3f\n", nm, b, b - TRUE_BOTH))
+}
+cat("\n  Not adjusting for L1 leaves A1 confounded by the biomarker. Adjusting
+  for L1 blocks the pathway through which A0 acts, and additionally conditions
+  on a collider (L1 is caused by both A0 and U), which opens a new bias.
+
+  Even the impossible model, which adjusts for the unobserved frailty U, does
+  not recover the total effect, because it still blocks the mediated path.
+
+  There is no covariate set that fixes this. The problem is not a missing
+  variable, it is that one variable has two incompatible roles.\n")
+
+#' ## 3. Marginal structural model by IPTW, eq. (45.2)-(45.3)
+#'
+#' $$\mathbb{E}[Y^{\bar a}]=\beta_0+\beta_1 a_0+\beta_2 a_1 \qquad (45.2)$$
+#' $$sw_i=\prod_k\frac{P(A_k=a_{ik}\mid \bar A_{k-1})}
+#'                    {P(A_k=a_{ik}\mid \bar A_{k-1},\bar L_k)} \qquad (45.3)$$
+
+#+ msm
+header("3. Stabilised weights and the MSM (45.2)-(45.3)")
+msm_weights <- function(d, stabilise = TRUE, truncate = NULL) {
+  # Denominator: treatment model given the full measured history.
+  p0_d <- predict(glm(A0 ~ L0, binomial(), d), type = "response")
+  p1_d <- predict(glm(A1 ~ L1 + L0 + A0, binomial(), d), type = "response")
+  den <- ifelse(d$A0 == 1, p0_d, 1 - p0_d) * ifelse(d$A1 == 1, p1_d, 1 - p1_d)
+  num <- 1
+  if (stabilise) {
+    p0_n <- predict(glm(A0 ~ 1, binomial(), d), type = "response")
+    p1_n <- predict(glm(A1 ~ A0, binomial(), d), type = "response")
+    num <- ifelse(d$A0 == 1, p0_n, 1 - p0_n) *
+           ifelse(d$A1 == 1, p1_n, 1 - p1_n)
+  }
+  w <- num / den
+  if (!is.null(truncate))
+    w <- pmin(pmax(w, quantile(w, truncate / 100)),
+              quantile(w, 1 - truncate / 100))
+  w
+}
+#' A single study of 6,000 is noisy, so average over replicate studies: the
+#' question here is whether each estimator is BIASED, which is a property of
+#' the recipe rather than of one dataset (Module 29).
+acc <- matrix(NA_real_, 25, 6)
+for (i in 1:25) {
+  di <- simulate_study(n = 6000, seed = 1200 + i)
+  f1 <- coef(lm(Y ~ A0 + A1 + L0, data = di))
+  f2 <- coef(lm(Y ~ A0 + A1 + L0 + L1, data = di))
+  fm <- coef(lm(Y ~ A0 + A1, data = di, weights = msm_weights(di)))
+  acc[i, ] <- c(f1[["A0"]], f1[["A1"]], f2[["A0"]], f2[["A1"]],
+                fm[["A0"]], fm[["A1"]])
+}
+m <- colMeans(acc)
+cat("  mean over 25 replicate studies of n = 6,000\n\n")
+cat(sprintf("  %-40s%11s%11s%9s%9s\n", "method", "A0 effect", "A1 effect",
+            "both", "bias"))
+for (z in list(list("regression adjusting L0 only", 1, 2),
+               list("regression adjusting L0 and L1", 3, 4),
+               list("MSM by stabilised IPTW (45.3)", 5, 6))) {
+  tot <- m[z[[2]]] + m[z[[3]]]
+  cat(sprintf("  %-40s%11.3f%11.3f%9.3f%9.3f\n", z[[1]], m[z[[2]]],
+              m[z[[3]]], tot, tot - TRUE_BOTH))
+}
+cat(sprintf("  %-40s%11.3f%11.3f%9.3f%9.3f\n", "TRUTH (by intervention)",
+            TRUE_A0, TRUE_A1, TRUE_BOTH, 0))
+w <- msm_weights(d)
+cat("\n  The MSM recovers both effects, including the larger total effect of
+  A0 that runs partly through L1. The weights build a pseudo-population in
+  which L1 no longer predicts A1, so the confounding is removed WITHOUT
+  conditioning on the mediator, which is why the mediated path survives in the
+  estimate.
+
+  The regression adjusting for L1 does the opposite: it recovers roughly the
+  DIRECT effect of A0 and loses the mediated part entirely.
+
+  Note the MSM still assumes no unmeasured confounding of treatment, which
+  here means it would fail if U affected treatment directly. Weighting fixes
+  the structural problem, not the ignorability assumption.\n")
+
+#' ## 4. The weights are the weak point
+
+#+ diagnostics
+header("4. Weight diagnostics, and why stabilisation matters")
+w_un <- msm_weights(d, stabilise = FALSE)
+cat(sprintf("  %-26s%8s%9s%10s%10s%9s\n", "weights", "mean", "SD", "max",
+            "ESS", "ESS %"))
+for (z in list(list("unstabilised", w_un), list("stabilised (45.3)", w),
+               list("stabilised + 1% trim", msm_weights(d, truncate = 1)))) {
+  ww <- z[[2]]
+  ess <- sum(ww)^2 / sum(ww^2)
+  cat(sprintf("  %-26s%8.3f%9.3f%10.2f%10.0f%9.1f\n", z[[1]], mean(ww),
+              sd(ww), max(ww), ess, 100 * ess / nrow(d)))
+}
+cat("\n  Stabilised weights have mean near 1 and a far smaller spread, which
+  is why they are the default: same estimand, much lower variance.
+
+  The effective sample size is the number to report. A study of 6,000 people
+  whose weights leave an ESS of 2,000 has the precision of a study of 2,000,
+  and if the ESS collapses the estimate is being driven by a handful of
+  individuals with extreme weights.
+
+  Truncation buys stability and introduces bias. State the rule you used and
+  show the estimate with and without it.\n")
+
+#' ## 5. Positivity: the assumption that fails silently
+
+#+ positivity
+header("5. When some people could never have been treated")
+cat(sprintf("  %-30s%14s%13s%15s\n", "treatment model strength",
+            "min P(treat)", "max weight", "MSM estimate"))
+for (strength in c(0.9, 2.0, 4.0)) {
+  set.seed(9)
+  n <- 6000
+  U <- rnorm(n); L0 <- rnorm(n) + 0.8 * U
+  A0 <- as.numeric(runif(n) < plogis(strength * L0))
+  L1 <- 0.7 * L0 + 0.9 * U - 1.4 * A0 + rnorm(n)
+  A1 <- as.numeric(runif(n) < plogis(strength * L1))
+  Y <- TRUE_PER_PERIOD * (A0 + A1) + 1.1 * U + 0.6 * L1 + rnorm(n)
+  dd <- data.frame(L0 = L0, A0 = A0, L1 = L1, A1 = A1, Y = Y, cum = A0 + A1)
+  ww <- msm_weights(dd)
+  p1 <- predict(glm(A1 ~ L1 + L0 + A0, binomial(), dd), type = "response")
+  est <- coef(lm(Y ~ cum, data = dd, weights = ww))[[2]] * 2
+  cat(sprintf("  %-30.1f%14.4f%13.1f%15.3f\n", strength,
+              min(min(p1), 1 - max(p1)), max(ww), est))
+}
+cat(sprintf("  %-30s%14s%13s%15.3f\n", "TRUTH", "", "", TRUE_BOTH))
+cat("\n  As the treatment becomes more deterministic, some people have almost
+  no chance of receiving the treatment they did not receive. Their weights
+  explode and the estimate degrades.
+
+  This is a POSITIVITY violation, and it is the reason to inspect the
+  predicted probability distribution before weighting. If a subgroup never
+  receives one of the treatments, no method can tell you what would have
+  happened to them; the honest move is to restrict the population and say
+  so.\n")
+
+#' ## 6. Multi-state models, eq. (45.4)
+#'
+#' $$\lambda_{hj}(t)=\lim_{\Delta\to 0}\frac{P(\text{state }j\text{ at }
+#'   t+\Delta\mid\text{state }h\text{ at }t)}{\Delta} \qquad (45.4)$$
+
+#+ multistate
+header("6. Illness-death: more than one thing can happen (45.4)")
+set.seed(12)
+n <- 4000
+# Healthy -> Ill -> Dead, with direct Healthy -> Dead too.
+rate_ill <- 0.12; rate_death_h <- 0.05; rate_death_i <- 0.30
+t_ill <- rexp(n, rate_ill)
+t_death_h <- rexp(n, rate_death_h)
+becomes_ill <- t_ill < t_death_h
+t_entry_ill <- ifelse(becomes_ill, t_ill, Inf)
+t_death <- ifelse(becomes_ill, t_ill + rexp(n, rate_death_i), t_death_h)
+cens <- rexp(n, 1 / 8)
+obs <- pmin(t_death, cens); died <- t_death <= cens
+cat(sprintf("  transition intensities (45.4): healthy->ill %.2f, healthy->dead %.2f, ill->dead %.2f\n\n",
+            rate_ill, rate_death_h, rate_death_i))
+cat(sprintf("  %-44s%10s\n", "quantity", "value"))
+cat(sprintf("  %-44s%9.1f%%\n", "became ill before dying", 100 * mean(becomes_ill)))
+cat(sprintf("  %-44s%9.1f%%\n", "died during follow-up", 100 * mean(died)))
+# The mistake: treat illness as a fixed baseline covariate.
+ever_ill <- becomes_ill & (t_entry_ill <= obs)
+naive <- t.test(obs[ever_ill], obs[!ever_ill])
+cat("\n  Naive comparison, 'ever ill' as a baseline group:\n")
+cat(sprintf("    mean follow-up if ever ill    : %.2f\n", mean(obs[ever_ill])))
+cat(sprintf("    mean follow-up if never ill   : %.2f\n", mean(obs[!ever_ill])))
+cat(sprintf("    p = %.2e\n", naive$p.value))
+cat("\n  To be classified as 'ever ill' you must first survive long enough to
+  become ill, so the comparison is contaminated by immortal time, exactly as
+  in Module 38. Illness is a STATE ENTERED AT A TIME, not a baseline
+  attribute.
+
+  The multi-state formulation keeps each transition separate: each intensity
+  in (45.4) is estimated on the people actually at risk of that transition at
+  that moment. Competing risks (Module 38) is the special case where the
+  states are absorbing and there is no recovery.\n")
+# Show the fix: split follow-up at the moment of illness.
+rows <- list()
+for (i in seq_len(n)) {
+  if (becomes_ill[i] && t_entry_ill[i] < obs[i]) {
+    rows[[length(rows) + 1]] <- c(0, t_entry_ill[i], 0, 0)
+    rows[[length(rows) + 1]] <- c(t_entry_ill[i], obs[i], as.integer(died[i]), 1)
+  } else {
+    rows[[length(rows) + 1]] <- c(0, obs[i], as.integer(died[i]), 0)
+  }
+}
+tv <- as.data.frame(do.call(rbind, rows))
+names(tv) <- c("start", "stop", "event", "ill")
+tv <- tv[tv$stop > tv$start, ]
+py <- tapply(tv$stop - tv$start, tv$ill, sum)
+ev <- tapply(tv$event, tv$ill, sum)
+cat("  Splitting follow-up at the moment of illness:\n")
+cat(sprintf("    death rate while healthy : %.3f per unit time (true %.2f)\n",
+            ev[["0"]] / py[["0"]], rate_death_h))
+cat(sprintf("    death rate while ill     : %.3f per unit time (true %.2f)\n",
+            ev[["1"]] / py[["1"]], rate_death_i))
+
+#' ## 7. Figure
+
+#+ figure, fig.width = 13, fig.height = 4.5
+png(file.path(OUT, "longitudinal_causal.png"), width = 1300, height = 450)
+par(mfrow = c(1, 3), mar = c(4.5, 4.5, 3, 1))
+br <- seq(0, max(c(w_un, w)) + 0.2, length.out = 60)
+h1 <- hist(w_un, breaks = br, plot = FALSE)
+h2 <- hist(w, breaks = br, plot = FALSE)
+plot(h1$mids, pmax(h1$counts, 0.5), type = "h", log = "y", col = "firebrick",
+     lwd = 3, xlab = "IPTW weight", ylab = "count", main = "Eq. (45.3)")
+points(h2$mids, pmax(h2$counts, 0.5), type = "h", col = "steelblue", lwd = 3)
+legend("topright", c("unstabilised", "stabilised"), lwd = 3, bty = "n",
+       col = c("firebrick", "steelblue"))
+boxplot(list(`no adj` = acc[, 1] + acc[, 2], `adj L1` = acc[, 3] + acc[, 4],
+             MSM = acc[, 5] + acc[, 6]), col = "grey85",
+        ylab = "estimated total effect",
+        main = "25 replicate studies")
+abline(h = TRUE_BOTH, col = "firebrick", lwd = 2, lty = 2)
+legend("topright", "truth", lty = 2, lwd = 2, col = "firebrick", bty = "n")
+km_h <- survfit(Surv(obs[!ever_ill], died[!ever_ill]) ~ 1)
+km_i <- survfit(Surv(obs[ever_ill], died[ever_ill]) ~ 1)
+plot(km_h, conf.int = FALSE, col = "steelblue", lwd = 2, xlab = "time",
+     ylab = "survival", main = "Immortal time makes illness look safe")
+lines(km_i, conf.int = FALSE, col = "firebrick", lwd = 2)
+legend("topright", c("never ill", "ever ill"), lwd = 2, bty = "n",
+       col = c("steelblue", "firebrick"))
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "longitudinal_causal.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: When are g-methods actually needed?
+#'
+#' Vary the strength of the A0 -> L1 feedback and find where ordinary
+#' regression starts to fail.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sim_fb <- function(fb, seed = 0, n = 5000) {
+#   set.seed(seed)
+#   U <- rnorm(n); L0 <- rnorm(n) + 0.8 * U
+#   A0 <- as.numeric(runif(n) < plogis(0.9 * L0))
+#   L1 <- 0.7 * L0 + 0.9 * U - fb * A0 + rnorm(n)
+#   A1 <- as.numeric(runif(n) < plogis(0.9 * L1))
+#   Y <- TRUE_PER_PERIOD * (A0 + A1) + 1.1 * U + 0.6 * L1 + rnorm(n)
+#   data.frame(L0 = L0, A0 = A0, L1 = L1, A1 = A1, Y = Y, cum = A0 + A1)
+# }
+# cat(sprintf("  %-22s%10s%10s%10s\n", "A0 -> L1 feedback", "no adj",
+#             "adj L1", "MSM"))
+# for (fb in c(0.0, 0.5, 1.4, 2.5)) {
+#   dd <- sim_fb(fb, seed = 31)
+#   a <- coef(lm(Y ~ cum + L0, data = dd))[[2]] * 2
+#   b <- coef(lm(Y ~ cum + L0 + L1, data = dd))[[2]] * 2
+#   cc <- coef(lm(Y ~ cum, data = dd, weights = msm_weights(dd)))[[2]] * 2
+#   cat(sprintf("  %-22.1f%10.3f%10.3f%10.3f\n", fb, a, b, cc))
+# }
+# cat("\n  (the true total effect changes with the feedback, because the
+#   mediated path is part of it: it is -2.0 at fb = 0 and more negative as
+#   fb grows)\n")
+#
+# ## With NO feedback (fb = 0) the problem disappears: L1 is a plain
+# ## confounder, adjusting for it is correct, and the methods roughly agree.
+# ## That is worth seeing, because it shows g-methods are not needed
+# ## everywhere.
+# ##
+# ## As the feedback grows, the two regressions move in OPPOSITE directions
+# ## while the MSM tracks the (moving) truth. Opposite directions is the
+# ## diagnostic signature: if adjusting and not adjusting for a time-varying
+# ## covariate give answers that straddle rather than bracket, you have this
+# ## structure.
+# ##
+# ## The condition for needing g-methods is precise: a covariate that both
+# ## predicts later treatment AND is affected by earlier treatment.
+
+#' ### Problem 2: Does the MSM survive unmeasured confounding?
+#'
+#' Let the frailty U influence treatment directly and see what the MSM does.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# sim_u <- function(u_on_a, seed = 0, n = 6000) {
+#   set.seed(seed)
+#   U <- rnorm(n); L0 <- rnorm(n) + 0.8 * U
+#   A0 <- as.numeric(runif(n) < plogis(0.9 * L0 + u_on_a * U))
+#   L1 <- 0.7 * L0 + 0.9 * U - 1.4 * A0 + rnorm(n)
+#   A1 <- as.numeric(runif(n) < plogis(0.9 * L1 + u_on_a * U))
+#   Y <- TRUE_PER_PERIOD * (A0 + A1) + 1.1 * U + 0.6 * L1 + rnorm(n)
+#   data.frame(L0 = L0, A0 = A0, L1 = L1, A1 = A1, Y = Y, cum = A0 + A1)
+# }
+# cat(sprintf("  true total effect = %.3f\n\n", TRUE_BOTH))
+# cat(sprintf("  %-28s%14s%9s\n", "U -> treatment strength", "MSM estimate",
+#             "bias"))
+# for (uo in c(0.0, 0.4, 0.8, 1.5)) {
+#   dd <- sim_u(uo, seed = 41)
+#   est <- coef(lm(Y ~ cum, data = dd, weights = msm_weights(dd)))[[2]] * 2
+#   cat(sprintf("  %-28.1f%14.3f%9.3f\n", uo, est, est - TRUE_BOTH))
+# }
+#
+# ## The MSM is unbiased only in the first row. As soon as an unmeasured
+# ## variable influences treatment, the weights are computed from the wrong
+# ## model and the bias returns.
+# ##
+# ## This is the honest limitation and it mirrors Module 22 and exercise E4:
+# ## g-methods solve the STRUCTURAL problem of a mediator-confounder, they do
+# ## not solve ignorability. No weighting scheme can adjust for something you
+# ## did not measure.
+# ##
+# ## Report a sensitivity analysis: how strong would U have to be to move the
+# ## estimate to null? That is the E-value logic applied to a longitudinal
+# ## setting.
+
+#' ### Problem 3: Immortal time in a multi-state setting
+#'
+#' Quantify the bias from treating a state entered during follow-up as a
+#' baseline attribute, and confirm the time-dependent analysis removes it.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# ## Naive: 'ever ill' as a baseline covariate.
+# naive_df <- data.frame(T = obs, E = as.integer(died),
+#                        ill = as.integer(ever_ill))
+# cn <- coxph(Surv(T, E) ~ ill, data = naive_df)
+# ## Correct: split follow-up at the moment of illness (already built as `tv`).
+# cph <- coxph(Surv(start, stop, event) ~ ill, data = tv)
+# true_hr <- rate_death_i / rate_death_h
+# cat(sprintf("  true hazard ratio for illness = %.2f\n\n", true_hr))
+# cat(sprintf("  %-42s%9s%9s\n", "analysis", "HR", "bias"))
+# cat(sprintf("  %-42s%9.2f%9.2f\n", "ill as a BASELINE covariate",
+#             exp(coef(cn)[[1]]), exp(coef(cn)[[1]]) - true_hr))
+# cat(sprintf("  %-42s%9.2f%9.2f\n", "ill as a TIME-DEPENDENT covariate",
+#             exp(coef(cph)[[1]]), exp(coef(cph)[[1]]) - true_hr))
+#
+# ## The baseline analysis understates the hazard dramatically, and can even
+# ## reverse it, because everyone in the 'ill' group is guaranteed to have
+# ## survived until they became ill. That immortal person-time is credited to
+# ## the illness state.
+# ##
+# ## Splitting the follow-up assigns each person-day to the state they were
+# ## actually in, and recovers the true ratio.
+# ##
+# ## The general rule, which covers Module 38's landmark analysis and this
+# ## module's multi-state models: a variable measured AFTER baseline must
+# ## enter the model as time-dependent, or the analysis must start the clock
+# ## at the moment the variable is known.
+
+#' ## What to take away
+#'
+#' 1. A covariate that is **both** affected by prior treatment and predictive
+#'    of later treatment (45.1) cannot be handled by any single regression.
+#' 2. **IPTW with stabilised weights** (45.3) removes the confounding without
+#'    conditioning on the mediator.
+#' 3. Report the **weight distribution and effective sample size**, and state
+#'    any truncation rule.
+#' 4. **Positivity** fails silently. Inspect the predicted probabilities.
+#' 5. G-methods fix the structural problem, not unmeasured confounding.
+#' 6. **Multi-state models** (45.4) treat a state as something entered at a
+#'    time, which is what removes immortal-time bias.
+#'
+#' **Next:** `46_interpretation_and_foundation_models.R`

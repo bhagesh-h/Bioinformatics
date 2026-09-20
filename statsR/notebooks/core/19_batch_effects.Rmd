@@ -212,10 +212,43 @@ cat(sprintf("\n  %-40s%7s%7s%7s%10s%8s\n", "analysis", "rej", "TP", "FP", "sens"
 evaluate(de_test(s2$Y, s2$meta), s2$truth, "ignore the hidden batch")
 evaluate(de_with_sv(s2$Y, bio2[, 2], SV), s2$truth, "adjust for 1 surrogate variable")
 evaluate(de_adjusted(s2$Y, s2$meta), s2$truth, "adjust for the TRUE batch (oracle)")
-cat("\n  The surrogate variable recovers most of what knowing the true batch\n")
-cat("  would have given. RUV is the alternative, using NEGATIVE CONTROL\n")
-cat("  features (eq. 19.6) - valid only if those controls really are\n")
-cat("  unaffected by the biology, an assumption to defend.\n")
+```
+
+The sensitivity column is not enough. Check the calibration directly, on
+the features we KNOW are null, and check that the SV has not simply
+absorbed the biology.
+
+```{r}
+null_rate <- function(pv) mean(pv[!s2$truth] < 0.05)
+cat(sprintf("\n  among features that are truly NULL, rate of p < 0.05:\n"))
+cat(sprintf("    adjusting for the surrogate variable : %.3f   <- should be 0.05\n",
+            null_rate(de_with_sv(s2$Y, bio2[, 2], SV))))
+cat(sprintf("    adjusting for the TRUE batch (oracle): %.3f\n",
+            null_rate(de_adjusted(s2$Y, s2$meta))))
+cat(sprintf("    corr(SV1, biology) = %.4f   (so it is NOT stealing signal)\n",
+            abs(cor(SV[, 1], bio2[, 2]))))
+cat("
+  Here the surrogate variable recovers most of what knowing the true batch
+  would have given, and the null calibration holds. Do not generalise that:
+  it held because this SV is an almost perfect proxy for the hidden batch.
+
+  The SV was ESTIMATED from these very residuals, as their leading component,
+  and is then used as though it were a known covariate. When the estimate is
+  poorer, that plug-in removes more variance per gene than a fixed covariate
+  would, the residual variance comes out too small, and the false positive
+  rate climbs - the Python version of this module lands at 0.203 against a
+  nominal 0.05 on its own draw. It is section 4's lesson in a new costume: a
+  quantity you estimated carries uncertainty, and treating it as observed
+  throws that uncertainty away.
+
+  So always run the two checks above rather than assuming, decide the number
+  of SVs by a principled rule rather than by eye, and prefer an implementation
+  that accounts for the estimation (sva's iterative reweighting) over a
+  hand-rolled plug-in like this one.
+
+  RUV is the alternative, using NEGATIVE CONTROL features (eq. 19.6) - valid
+  only if those controls really are unaffected by the biology, an assumption
+  to defend.\n")
 ```
 
 ## 6. The two-sided diagnostic

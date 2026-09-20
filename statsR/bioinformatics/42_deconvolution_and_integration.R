@@ -1,0 +1,538 @@
+#' ---
+#' title: "Applied 42 - Deconvolution, batch integration, and zero-inflation"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 42, equations (42.1)-(42.6)
+#' **Core modules used:** 11, 19, 13, 26, 36
+#'
+#' ## Dataset card
+#'
+#' | | |
+#' |---|---|
+#' | **Real analogue** | Bulk RNA-seq deconvolved with CIBERSORTx; scRNA-seq integrated with Harmony or MNN |
+#' | **Key threats** | Wrong signature; collinear cell types; compositional output; over-correction; imaginary zero-inflation |
+#' | **Here** | Simulated mixtures with known proportions, and UMI counts with a known zero mechanism |
+#'
+#' ## Three claims to test
+#'
+#' 1. Deconvolution is a constrained regression, and it inherits every problem
+#'    regression has with collinear predictors.
+#' 2. Integration trades mixing against biology, and one metric alone can
+#'    always be made to look good.
+#' 3. Zero-inflation in UMI data is mostly a myth, and testable.
+
+#+ setup, message = FALSE
+MODULE_NAME <- "42_deconvolution_and_integration"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+set.seed(42)
+
+#' ## 1. Deconvolution is constrained regression, eq. (42.1)-(42.2)
+#'
+#' $$y_g=\sum_k S_{gk}w_k+\varepsilon_g,\qquad w_k\ge 0,\ \sum_k w_k=1
+#'   \qquad (42.1)-(42.2)$$
+
+#+ deconvolve
+header("1. Recovering cell-type proportions from a mixture (42.1)-(42.2)")
+#' Cell-type reference profiles. `similarity` makes two types alike, which is
+#' what happens with, say, CD4 and CD8 T cells.
+make_signatures <- function(n_genes = 600, n_types = 5, similarity = 0,
+                            seed = 0) {
+  set.seed(seed)
+  S <- matrix(exp(rnorm(n_genes * n_types, 3.0, 1.0)), n_genes, n_types)
+  if (similarity > 0) {
+    mid <- (S[, 1] + S[, 2]) / 2
+    S[, 1] <- (1 - similarity) * S[, 1] + similarity * mid
+    S[, 2] <- (1 - similarity) * S[, 2] + similarity * mid
+  }
+  S
+}
+#' Eq. (42.2): non-negative least squares, solved with a bound-constrained
+#' optimiser so the module needs no extra packages. Then rescale onto the
+#' simplex.
+deconvolve <- function(y, S) {
+  StS <- crossprod(S); Sty <- as.vector(crossprod(S, y))
+  fn <- function(w) sum((S %*% w - y)^2)
+  gr <- function(w) 2 * (as.vector(StS %*% w) - Sty)
+  start <- pmax(qr.coef(qr(S), y), 0)
+  start[!is.finite(start)] <- 0
+  w <- optim(start, fn, gr, method = "L-BFGS-B",
+             lower = rep(0, ncol(S)))$par
+  if (sum(w) > 0) w / sum(w) else rep(1 / ncol(S), ncol(S))
+}
+S <- make_signatures(seed = 1)
+n_types <- ncol(S)
+true_w <- c(0.40, 0.25, 0.15, 0.15, 0.05)
+cat(sprintf("  %d genes, %d cell types\n\n", nrow(S), n_types))
+cat(sprintf("  %-14s%s%15s\n", "noise level",
+            paste(sprintf("%10s", paste0("type ", 1:n_types)), collapse = ""),
+            "mean |error|"))
+cat(sprintf("  %-14s%s%15s\n", "TRUTH",
+            paste(sprintf("%10.3f", true_w), collapse = ""), ""))
+for (noise in c(0.02, 0.10, 0.30)) {
+  est <- t(replicate(200, {
+    y <- as.vector(S %*% true_w) * exp(rnorm(nrow(S), 0, noise))
+    deconvolve(y, S) }))
+  cat(sprintf("  %-14.2f%s%15.4f\n", noise,
+              paste(sprintf("%10.3f", colMeans(est)), collapse = ""),
+              mean(abs(colMeans(est) - true_w))))
+}
+cat("\n  With a correct signature matrix, deconvolution is accurate and
+  degrades gracefully with noise. Everything below is about what happens when
+  one of its assumptions fails.\n")
+
+#' ## 2. Collinear cell types, eq. (42.2)
+
+#+ collinear
+header("2. Similar cell types are collinear predictors")
+cat(sprintf("  %-30s%13s%11s%14s\n", "similarity of types 1 and 2",
+            "corr(S1,S2)", "SD of w1", "SD of w1+w2"))
+for (sim in c(0.0, 0.5, 0.85, 0.97)) {
+  S2 <- make_signatures(similarity = sim, seed = 2)
+  est <- t(replicate(300, {
+    y <- as.vector(S2 %*% true_w) * exp(rnorm(nrow(S2), 0, 0.10))
+    deconvolve(y, S2) }))
+  cat(sprintf("  %-30.2f%13.3f%11.4f%14.4f\n", sim, cor(S2[, 1], S2[, 2]),
+              sd(est[, 1]), sd(est[, 1] + est[, 2])))
+}
+cat("\n  As the two signatures converge, the individual estimates become
+  wildly unstable while their SUM stays precise. The data determines how much
+  'type 1 or type 2' there is, and cannot split it.
+
+  This is the collinearity behaviour of Module 11, and it has a practical
+  consequence: report related cell types as a COMBINED fraction unless you can
+  show the signatures are separable. A paper reporting a shift from CD4 to CD8
+  with a constant total is often reporting numerical instability.\n")
+
+#' ## 3. The output is compositional
+
+#+ compositional
+header("3. Proportions cannot move independently")
+S3 <- make_signatures(seed = 3)
+# One cell type genuinely doubles; the others are untouched in absolute terms.
+abs_ctrl <- c(1000, 600, 400, 400, 150)
+abs_case <- abs_ctrl; abs_case[1] <- abs_case[1] * 2
+sim_prop <- function(ab) t(replicate(300, {
+  w <- ab / sum(ab)
+  y <- as.vector(S3 %*% w) * exp(rnorm(nrow(S3), 0, 0.08))
+  deconvolve(y, S3) }))
+c0 <- sim_prop(abs_ctrl); c1 <- sim_prop(abs_case)
+cat("  Only cell type 1 changed, and it DOUBLED in absolute abundance.\n\n")
+cat(sprintf("  %-8s%18s%18s%18s%18s\n", "type", "absolute change",
+            "proportion ctrl", "proportion case", "apparent change"))
+for (i in 1:n_types)
+  cat(sprintf("  %-8d%18.2f%18.3f%18.3f%18.2f\n", i,
+              abs_case[i] / abs_ctrl[i], mean(c0[, i]), mean(c1[, i]),
+              mean(c1[, i]) / mean(c0[, i])))
+cat("\n  Four cell types did not change at all and every one of them appears
+  to have fallen by about a quarter. That is closure (Topic 26), not biology.
+
+  Deconvolution output is compositional and must be analysed as such: use
+  log-ratios, or anchor to an absolute measurement such as total cell count
+  per gram of tissue. Testing proportions directly with a t-test per cell type
+  produces exactly the correlated false positives Module 36 demonstrates.\n")
+
+#' ## 4. Batch integration, eq. (42.3)
+#'
+#' $$x_i^{corr}=x_i-\frac{1}{|P|}\sum_{(a,b)\in P}(x_a-x_b) \qquad (42.3)$$
+
+#+ integration
+header("4. MNN-style correction, and the metric that can be gamed (42.3)")
+#' Two batches, two cell types. If shared is FALSE, type 2 exists in only one
+#' batch, which is what stops naive alignment being safe.
+make_batches <- function(n_per = 300, n_genes = 40, batch_shift = 3.0,
+                         seed = 0, shared = TRUE) {
+  set.seed(seed)
+  X <- list(); bb <- cc <- integer(0)
+  for (b in 0:1) {
+    types <- if (shared || b == 0) 0:1 else 0
+    for (t in types) {
+      centre <- rep(b * batch_shift, n_genes)
+      centre[1:5] <- centre[1:5] + t * 4.0             # biology
+      X[[length(X) + 1]] <- matrix(rnorm(n_per * n_genes, 0, 1), n_per) +
+        rep(centre, each = n_per)
+      bb <- c(bb, rep(b, n_per)); cc <- c(cc, rep(t, n_per))
+    }
+  }
+  list(X = do.call(rbind, X), batch = bb, ctype = cc)
+}
+sqdist <- function(A, B)
+  outer(rowSums(A^2), rowSums(B^2), "+") - 2 * A %*% t(B)
+#' Eq. (42.3): find mutual nearest neighbours across batches and subtract the
+#' average difference.
+mnn_correct <- function(X, batch, k = 20) {
+  a <- X[batch == 0, , drop = FALSE]; b <- X[batch == 1, , drop = FALSE]
+  d <- sqdist(a, b)
+  nn_a <- t(apply(d, 1, order))[, 1:k, drop = FALSE]   # b-neighbours of each a
+  nn_b <- t(apply(d, 2, order))[, 1:k, drop = FALSE]   # a-neighbours of each b
+  vecs <- list()
+  for (i in seq_len(nrow(a))) for (j in nn_a[i, ])
+    if (i %in% nn_b[j, ]) vecs[[length(vecs) + 1]] <- a[i, ] - b[j, ]
+  if (!length(vecs)) return(X)
+  vec <- colMeans(do.call(rbind, vecs))
+  out <- X
+  out[batch == 1, ] <- sweep(out[batch == 1, , drop = FALSE], 2, vec, "+")
+  out
+}
+#' Fraction of each cell's neighbours from the other batch. 0.5 is ideal.
+mixing <- function(X, batch, k = 25) {
+  d <- sqdist(X, X); diag(d) <- Inf
+  nn <- t(apply(d, 1, order))[, 1:k, drop = FALSE]
+  mean(matrix(batch[nn], nrow(nn)) != batch)
+}
+#' Silhouette-like separation of the true cell types.
+bio_preserved <- function(X, ctype) {
+  c0 <- X[ctype == 0, , drop = FALSE]; c1 <- X[ctype == 1, , drop = FALSE]
+  between <- sqrt(sum((colMeans(c0) - colMeans(c1))^2))
+  within <- (mean(apply(c0, 2, sd)) + mean(apply(c1, 2, sd))) / 2
+  between / within
+}
+B <- make_batches(seed = 5)
+X <- B$X; batch <- B$batch; ctype <- B$ctype
+Xc <- mnn_correct(X, batch)
+# An "integration" that destroys everything: shrink the real structure to
+# almost nothing and let noise dominate.
+X_over <- sweep(X, 2, colMeans(X)) * 0.02 +
+  matrix(rnorm(length(X), 0, 0.5), nrow(X))
+cat(sprintf("  %-28s%15s%20s\n", "state", "batch mixing",
+            "biology preserved"))
+for (z in list(list("before correction", X), list("MNN corrected (42.3)", Xc),
+               list("aggressive over-correction", X_over)))
+  cat(sprintf("  %-28s%15.3f%20.2f\n", z[[1]], mixing(z[[2]], batch),
+              bio_preserved(z[[2]], ctype)))
+cat("\n  Read the two columns together, never one alone. The over-corrected
+  version has the BEST mixing score of the three, and it achieved that by
+  deleting the biology.
+
+  Any integration strong enough to remove all batch signal will remove biology
+  correlated with batch. Report a mixing metric AND a biology-preservation
+  metric, and if your design is confounded no correction can separate them
+  (Module 19).\n")
+
+#' ## 5. Integration when a population exists in only one batch
+
+#+ unshared
+header("5. Mutual nearest neighbours protects against forced alignment")
+U <- make_batches(seed = 6, shared = FALSE)
+Xu <- U$X; bu <- U$batch; cu <- U$ctype
+Xu_c <- mnn_correct(Xu, bu)
+only_in_0 <- cu == 1
+cat(sprintf("  Cell type 2 appears in batch 0 only (%d cells).\n\n",
+            sum(only_in_0)))
+cat(sprintf("  %-26s%10s%38s\n", "", "mixing",
+            "type-2 cells pulled toward batch 1"))
+for (z in list(list("before", Xu), list("MNN corrected", Xu_c))) {
+  D <- z[[2]]
+  d_to_b1 <- sqrt(sum((colMeans(D[only_in_0, , drop = FALSE]) -
+                       colMeans(D[bu == 1, , drop = FALSE]))^2))
+  cat(sprintf("  %-26s%10.3f%38.2f\n", z[[1]], mixing(D, bu), d_to_b1))
+}
+cat("\n  The mutual criterion is what makes this safe. A cell in batch 0 with
+  no counterpart in batch 1 will rarely be part of a RECIPROCAL
+  nearest-neighbour pair, so it contributes little to the correction vector.
+
+  Methods that align batches globally, by matching distributions rather than
+  cells, have no such protection and will happily map a population that exists
+  in one batch onto an unrelated population in the other. Check what happens
+  to batch-specific populations before trusting any integration.\n")
+
+#' ## 6. Is there really zero-inflation? eq. (42.4)-(42.5)
+#'
+#' $$P(Y=0)=\left(\frac{1/\phi}{1/\phi+\mu}\right)^{1/\phi} \qquad (42.5)$$
+
+#+ zero-inflation
+header("6. Testing for zero-inflation instead of assuming it (42.4)-(42.5)")
+nb_zero_prob <- function(mu, disp) {
+  size <- 1 / disp
+  (size / (size + mu))^size
+}
+simulate_umi <- function(n_cells = 1500, n_genes = 800, disp = 0.25,
+                         pi_extra = 0, seed = 0) {
+  set.seed(seed)
+  mu <- exp(rnorm(n_genes, 0.5, 1.6))
+  size <- 1 / disp
+  lam <- matrix(rgamma(n_cells * n_genes, size,
+                       rate = rep(size / mu, each = n_cells)), n_cells)
+  y <- matrix(rpois(length(lam), lam), n_cells)
+  if (pi_extra > 0)
+    y <- y * (matrix(runif(length(y)), nrow(y)) > pi_extra)  # true dropout
+  list(y = y, mu = mu)
+}
+cat(sprintf("  %-34s%17s%14s%10s\n", "data", "mean obs zeros", "NB predicts",
+            "excess"))
+for (z in list(list("plain NB (no inflation)", 0.0),
+               list("NB + 20% true dropout", 0.20))) {
+  U2 <- simulate_umi(pi_extra = z[[2]], seed = 17)
+  y <- U2$y
+  obs <- colMeans(y == 0)
+  mu_hat <- colMeans(y); v <- apply(y, 2, var)
+  disp_hat <- pmin(pmax((v - mu_hat) / pmax(mu_hat^2, 1e-9), 1e-3), 10)
+  pred <- nb_zero_prob(mu_hat, disp_hat)
+  cat(sprintf("  %-34s%17.3f%14.3f%10.3f\n", z[[1]], mean(obs), mean(pred),
+              mean(obs) - mean(pred)))
+}
+cat("\n  When the data really is negative binomial, the observed zeros match
+  the NB prediction, and fitting an extra inflation parameter would be fitting
+  noise. When there IS extra dropout, the excess shows up plainly.
+
+  This is a diagnostic anyone can run in three lines, and it is the reason the
+  scRNA-seq field moved away from zero-inflated models for UMI data. The zeros
+  were never unexplained; they are what a small mean produces.\n")
+
+#+ zi-cost
+header("6b. What fitting an unnecessary zero-inflation costs")
+cat("  Data has NO zero-inflation. Forcing a ZI parameter anyway, by
+  attributing every zero beyond the POISSON expectation to dropout:\n\n")
+cat(sprintf("  %-14s%10s%10s%10s%10s%12s\n", "dispersion", "Q1", "Q2", "Q3",
+            "Q4", "worst gene"))
+for (dsp in c(0.25, 0.80, 2.00)) {
+  U3 <- simulate_umi(pi_extra = 0, disp = dsp, seed = 23)
+  y <- U3$y; mu <- U3$mu
+  mu_hat <- colMeans(y); obs0 <- colMeans(y == 0)
+  pi_forced <- pmin(pmax(obs0 - exp(-mu_hat), 0), 0.95)
+  mu_zinb <- mu_hat / (1 - pi_forced)
+  qs <- quantile(mu, seq(0, 1, length.out = 5))
+  rr <- sapply(1:4, function(i) {
+    m <- mu >= qs[i] & mu <= qs[i + 1]; mean(mu_zinb[m] / mu[m]) })
+  cat(sprintf("  %-14.2f%9.2fx%9.2fx%9.2fx%9.2fx%11.2fx\n", dsp, rr[1], rr[2],
+              rr[3], rr[4], max(mu_zinb / mu)))
+}
+cat("  (expression quartiles, Q1 lowest; each cell is the mean inflation factor)\n")
+cat("\n  Read along a row first. The inflation is worst in the MIDDLE of the
+  expression range, not at the bottom. Very low-expressed genes have few
+  counts under either model, so the Poisson and NB zero predictions nearly
+  agree and little is misattributed. Very high-expressed genes have almost no
+  zeros at all. In between, the NB produces many more zeros than a Poisson
+  would, and every one of those gets blamed on dropout.
+
+  Now read down the columns. The size of the error is set by the DISPERSION,
+  because dispersion is what creates the extra zeros in the first place. At
+  dispersion 2.0 the typical mid-range gene's mean is inflated by nearly half,
+  and the worst gene by two thirds.
+
+  Test first (eq. 42.5). Model dropout only if the excess is there, and expect
+  the answer to depend on the protocol: plate-based and read-based assays
+  behave differently from UMI ones.\n")
+
+#' ## 7. Cell-cell communication, eq. (42.6)
+#'
+#' $$\text{score}(a\to b)=\bar{L}_a\cdot\bar{R}_b \qquad (42.6)$$
+
+#+ communication
+header("7. Communication scores and the null they are tested against (42.6)")
+set.seed(4207)
+n_cc <- 2000; K <- 4
+ctype_cc <- sample(0:(K - 1), n_cc, replace = TRUE)
+# Ligand and receptor expression depend ONLY on cell type abundance and a
+# shared technical factor. There is no communication in this simulation.
+depth <- rlnorm(n_cc, 0, 0.4)
+lig <- rpois(n_cc, exp(1.2 + 0.4 * ctype_cc) * depth)
+rec <- rpois(n_cc, exp(1.0 + 0.3 * ctype_cc) * depth)
+comm_score <- function(lig, rec, ctype, a, b)
+  mean(lig[ctype == a]) * mean(rec[ctype == b])          # eq. (42.6)
+pairs <- expand.grid(a = 0:(K - 1), b = 0:(K - 1))
+obs <- mapply(function(a, b) comm_score(lig, rec, ctype_cc, a, b),
+              pairs$a, pairs$b)
+null <- replicate(400, {
+  perm <- sample(ctype_cc)
+  mapply(function(a, b) comm_score(lig, rec, perm, a, b), pairs$a, pairs$b) })
+sig <- (1 + rowSums(null >= obs)) / 401
+cat(sprintf("  %dx%d = %d sender-receiver pairs, NO communication simulated\n",
+            K, K, nrow(pairs)))
+cat(sprintf("  pairs called significant by label permutation: %d\n",
+            sum(sig < 0.05)))
+cat(sprintf("\n  %-12s%12s%16s\n", "pair", "score", "permutation p"))
+for (i in order(-obs)[1:5])
+  cat(sprintf("  %-12s%12.1f%16.4f\n",
+              sprintf("(%d, %d)", pairs$a[i], pairs$b[i]), obs[i], sig[i]))
+cat("\n  There is no signalling anywhere in this simulation. Ligand and
+  receptor levels rise with cell-type index and with sequencing depth, and
+  that is enough to produce significant 'interactions'.
+
+  Two reasons. The score in (42.6) is a product of expression magnitudes, so
+  abundant ligands and abundant cell types dominate it. And permuting cell
+  labels asks 'is this pair unusual for these cell types', which is not the
+  same question as 'do these cells communicate'.
+
+  Treat communication output as a ranked hypothesis list. A claim of
+  signalling needs perturbation evidence, not a permutation p-value.\n")
+
+#' ## 8. Figure
+
+#+ figure, fig.width = 13, fig.height = 4.5
+png(file.path(OUT, "deconvolution.png"), width = 1300, height = 450)
+par(mfrow = c(1, 3), mar = c(4.5, 4.5, 3, 1))
+sims <- c(0, 0.3, 0.6, 0.85, 0.95, 0.99)
+sd1 <- sdsum <- numeric(length(sims))
+for (i in seq_along(sims)) {
+  S2 <- make_signatures(similarity = sims[i], seed = 2)
+  est <- t(replicate(150, deconvolve(as.vector(S2 %*% true_w) *
+                                       exp(rnorm(nrow(S2), 0, 0.10)), S2)))
+  sd1[i] <- sd(est[, 1]); sdsum[i] <- sd(est[, 1] + est[, 2])
+}
+plot(sims, sd1, type = "b", pch = 16, col = "firebrick", lwd = 2,
+     ylim = c(0, max(sd1)), xlab = "similarity of the two signatures",
+     ylab = "SD of the estimate", main = "Collinear types cannot be split")
+lines(sims, sdsum, type = "b", pch = 17, col = "steelblue", lwd = 2)
+legend("topleft", c("w1 alone", "w1 + w2"), pch = c(16, 17), lwd = 2,
+       bty = "n", col = c("firebrick", "steelblue"))
+plot(mixing(X, batch), bio_preserved(X, ctype), pch = 16, cex = 2,
+     col = "grey40", xlim = c(0, 0.6), ylim = c(0, 12),
+     xlab = "batch mixing", ylab = "biology preserved",
+     main = "Both metrics, or neither")
+points(mixing(Xc, batch), bio_preserved(Xc, ctype), pch = 16, cex = 2,
+       col = "steelblue")
+points(mixing(X_over, batch), bio_preserved(X_over, ctype), pch = 16, cex = 2,
+       col = "firebrick")
+text(c(mixing(X, batch), mixing(Xc, batch), mixing(X_over, batch)),
+     c(bio_preserved(X, ctype), bio_preserved(Xc, ctype),
+       bio_preserved(X_over, ctype)),
+     c("before", "MNN", "over-corrected"), pos = c(4, 2, 2), cex = 0.8)
+U4 <- simulate_umi(pi_extra = 0, seed = 17)
+mh <- colMeans(U4$y); ob <- colMeans(U4$y == 0)
+vv <- apply(U4$y, 2, var)
+dh <- pmin(pmax((vv - mh) / pmax(mh^2, 1e-9), 1e-3), 10)
+plot(log10(mh), ob, pch = 16, cex = 0.4, col = adjustcolor("grey40", 0.5),
+     xlab = "log10 mean expression", ylab = "fraction of zeros",
+     main = "Zeros are what a small mean gives")
+o <- order(mh)
+lines(log10(mh[o]), nb_zero_prob(mh, dh)[o], col = "firebrick", lwd = 2)
+legend("topright", c("observed", "NB prediction (42.5)"), pch = c(16, NA),
+       lwd = c(NA, 2), bty = "n", col = c("grey40", "firebrick"))
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "deconvolution.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: A signature from the wrong tissue
+#'
+#' Deconvolve using a signature matrix that is systematically wrong, as
+#' happens when the reference came from blood and the sample is tumour.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# S_true <- make_signatures(seed = 11)
+# cat(sprintf("  %-34s%s%13s\n", "reference used",
+#             paste(sprintf("%9s", paste0("type ", 1:n_types)), collapse = ""),
+#             "mean |err|"))
+# cat(sprintf("  %-34s%s%13s\n", "TRUTH",
+#             paste(sprintf("%9.3f", true_w), collapse = ""), ""))
+# for (z in list(list("correct reference", 0.0),
+#                list("mildly wrong platform", 0.25),
+#                list("wrong tissue", 0.8))) {
+#   set.seed(12)
+#   S_used <- S_true * exp(matrix(rnorm(length(S_true), 0, z[[2]]),
+#                                 nrow(S_true)))
+#   est <- t(replicate(200, deconvolve(as.vector(S_true %*% true_w) *
+#                        exp(rnorm(nrow(S_true), 0, 0.08)), S_used)))
+#   cat(sprintf("  %-34s%s%13.4f\n", z[[1]],
+#               paste(sprintf("%9.3f", colMeans(est)), collapse = ""),
+#               mean(abs(colMeans(est) - true_w))))
+# }
+#
+# ## The estimates degrade steadily and, importantly, they degrade SILENTLY:
+# ## the fit always returns proportions that sum to one and always looks like
+# ## a plausible answer. There is no residual diagnostic in the standard
+# ## output that screams "wrong reference".
+# ##
+# ## The check worth running is the residual: compare the observed bulk
+# ## profile against S %*% w_hat. A reference that does not fit leaves
+# ## structured, not random, residuals. Always report that fit, and always
+# ## match the reference platform and tissue.
+
+#' ### Problem 2: Does correction help or harm when the design is confounded?
+#'
+#' Compare integration on a balanced design and a fully confounded one.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# confounded_batches <- function(confound, seed = 0, n_per = 300,
+#                                n_genes = 40) {
+#   set.seed(seed)
+#   X <- list(); bb <- cc <- integer(0)
+#   for (b in 0:1) for (t in 0:1) {
+#     # When confounded, batch 0 is almost all type 0 and vice versa.
+#     n <- if (confound) round(n_per * if (b == t) 0.9 else 0.1) else n_per
+#     if (n == 0) next
+#     centre <- rep(b * 3.0, n_genes); centre[1:5] <- centre[1:5] + t * 4.0
+#     X[[length(X) + 1]] <- matrix(rnorm(n * n_genes), n) +
+#       rep(centre, each = n)
+#     bb <- c(bb, rep(b, n)); cc <- c(cc, rep(t, n))
+#   }
+#   list(X = do.call(rbind, X), batch = bb, ctype = cc)
+# }
+# cat(sprintf("  %-22s%-18s%10s%15s\n", "design", "state", "mixing",
+#             "biology kept"))
+# for (z in list(list("balanced", FALSE), list("confounded", TRUE))) {
+#   Cb <- confounded_batches(z[[2]], seed = 21)
+#   Cbc <- mnn_correct(Cb$X, Cb$batch)
+#   for (w in list(list("before", Cb$X), list("after MNN", Cbc)))
+#     cat(sprintf("  %-22s%-18s%10.3f%15.2f\n", z[[1]], w[[1]],
+#                 mixing(w[[2]], Cb$batch), bio_preserved(w[[2]], Cb$ctype)))
+# }
+#
+# ## On the balanced design, correction improves mixing and leaves the biology
+# ## intact. On the confounded design, correction improves mixing by
+# ## destroying the biological separation, because the batch difference and
+# ## the biological difference are the same direction in the data.
+# ##
+# ## The mixing metric improves in BOTH cases. If you reported only mixing,
+# ## the confounded design would look like the bigger success. This is why
+# ## Module 19 insists that confounding is a design failure with no analytical
+# ## remedy, and why the two metrics must always be read as a pair.
+
+#' ### Problem 3: When does zero-inflation actually appear?
+#'
+#' Compare a UMI-like protocol with a read-based one where amplification adds
+#' genuine dropout, and check whether the diagnostic distinguishes them.
+
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# cat(sprintf("  %-34s%12s%13s%9s%16s\n", "protocol", "obs zeros",
+#             "NB predicts", "excess", "verdict"))
+# for (z in list(list("UMI, well behaved", 0.00, 0.25),
+#                list("UMI, high dispersion", 0.00, 0.80),
+#                list("read-based, real dropout", 0.25, 0.25),
+#                list("severe dropout", 0.50, 0.25))) {
+#   Uz <- simulate_umi(pi_extra = z[[2]], disp = z[[3]], seed = 41)
+#   obs <- mean(colMeans(Uz$y == 0))
+#   mh2 <- colMeans(Uz$y); vv2 <- apply(Uz$y, 2, var)
+#   dh2 <- pmin(pmax((vv2 - mh2) / pmax(mh2^2, 1e-9), 1e-3), 20)
+#   pred <- mean(nb_zero_prob(mh2, dh2))
+#   exc <- obs - pred
+#   cat(sprintf("  %-34s%12.3f%13.3f%9.3f%16s\n", z[[1]], obs, pred, exc,
+#               if (exc > 0.02) "inflated" else "no inflation"))
+# }
+#
+# ## The diagnostic separates the cases correctly, and note the second row in
+# ## particular: high dispersion produces MANY zeros, and the NB still
+# ## predicts them. Lots of zeros is not evidence of zero-inflation. Only
+# ## zeros in excess of what the fitted mean-variance relationship predicts
+# ## are.
+# ##
+# ## That distinction is the whole argument. The scRNA-seq literature spent
+# ## years treating "mostly zeros" as self-evident proof of a dropout process,
+# ## when the negative binomial had already accounted for them. Estimate the
+# ## dispersion first, then ask what is left over.
+
+#' ## What to take away
+#'
+#' 1. Deconvolution is constrained regression (42.1)-(42.2) and inherits
+#'    collinearity: report similar cell types as a combined fraction.
+#' 2. Its output is **compositional**. One type rising forces the others down.
+#' 3. Integration must be judged on **mixing and biology together**.
+#'    Over-correction wins on mixing alone.
+#' 4. Mutual nearest neighbours protects batch-specific populations; global
+#'    distribution matching does not.
+#' 5. **Test** for zero-inflation with eq. (42.5) rather than assuming it.
+#'    Forcing one inflates low-expression means.
+#' 6. Communication scores (42.6) are driven by expression magnitude and
+#'    abundance. They rank hypotheses; they do not establish signalling.
+#'
+#' **Next:** `43_advanced_statistical_genetics.R`
