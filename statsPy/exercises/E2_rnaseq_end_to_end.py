@@ -15,7 +15,7 @@
 # # Exercise 2: A differential expression analysis, end to end
 #
 # **Curriculum link:** `stats.md` -> Topics 8, 13, 20, 29
-# **Core modules used:** 08, 13, 20, 30, 39
+# **Core modules used:** 08, 13, 20, 29
 #
 # ## The brief
 #

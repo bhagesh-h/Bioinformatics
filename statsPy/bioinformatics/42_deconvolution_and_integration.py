@@ -15,7 +15,7 @@
 # # Applied 42: Deconvolution, batch integration, and zero-inflation
 #
 # **Curriculum link:** `stats.md` -> Topic 42, equations (42.1)-(42.6)
-# **Core modules used:** 11, 19, 13, 26, 36
+# **Core modules used:** 11, 19, 13, 37, 26
 #
 # ## Dataset card
 #
@@ -169,7 +169,7 @@ print("""
   Deconvolution output is compositional and must be analysed as such: use
   log-ratios, or anchor to an absolute measurement such as total cell count
   per gram of tissue. Testing proportions directly with a t-test per cell type
-  produces exactly the correlated false positives Module 36 demonstrates.""")
+  produces exactly the correlated false positives Module 26 demonstrates.""")
 
 # %% [markdown]
 # ## 4. Batch integration, eq. (42.3)

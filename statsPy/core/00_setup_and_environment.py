@@ -269,3 +269,5 @@ print("=" * 70)
 # 1. Every stochastic step gets an explicitly seeded `Generator`.
 # 2. Every claim in a comment cites the equation number in `stats.md`.
 # 3. Nothing is installed at runtime; the container *is* the environment.
+# 
+# **Next:** `01_study_design_and_estimands.py`

@@ -15,7 +15,7 @@
 # # Applied 41: Trajectory inference and pseudotime
 #
 # **Curriculum link:** `stats.md` -> Topic 41, equations (41.1)-(41.3)
-# **Core modules used:** 17, 18, 11, 31
+# **Core modules used:** 17, 18, 11, 21
 #
 # ## Dataset card
 #
@@ -346,7 +346,7 @@ print("""
 
   Almost no published analysis propagates any of this into the gene-level
   p-values, which are computed as though pseudotime were measured without
-  error. That is a measurement-error problem (Module 26), and it biases the
+  error. That is a measurement-error problem (Module 37), and it biases the
   estimated shapes toward flatness.""")
 
 # %% [markdown]
@@ -494,7 +494,7 @@ print(f"\nFigure written to {os.path.join(OUT, 'trajectory.png')}")
 # # mean, its dispersion, its zeros. What it destroys is the COORDINATION
 # # between genes, which is the only thing a trajectory can be made of. That is
 # # what makes it the right null here, and it is the same reasoning used for
-# # gene-set tests in Module 39.
+# # gene-set tests in Module 29.
 
 # %% [markdown]
 # ### Problem 3: Pseudotime is not time

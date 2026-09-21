@@ -15,7 +15,7 @@
 # # Exercise 3: Audit a biomarker classifier
 #
 # **Curriculum link:** `stats.md` -> Topics 18, 21, 31
-# **Core modules used:** 18, 21, 31, 38
+# **Core modules used:** 18, 31, 21, 28b
 #
 # ## The brief
 #
@@ -230,7 +230,7 @@ print(f"  events per candidate predictor if all 5000 used: "
 # # Scaling and imputation leak too, but only a little - they use the test
 # # patients' PREDICTORS, not their OUTCOMES. That is the distinction worth
 # # remembering: leaks that touch y are catastrophic, leaks that touch only X
-# # are usually mild (cf. Module 40, where unsupervised factors barely leaked).
+# # are usually mild (cf. Module 30, where unsupervised factors barely leaked).
 
 # %% [markdown]
 # ### Q3: The missing baseline

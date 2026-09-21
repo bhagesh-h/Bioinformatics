@@ -4,7 +4,7 @@
 #' ---
 #'
 #' **Curriculum link:** `stats.md` -> Topic 43, equations (43.1)-(43.8)
-#' **Core modules used:** 08, 22, 23, 34
+#' **Core modules used:** 08, 32, 33, 24
 #'
 #' ## Dataset card
 #'
@@ -16,7 +16,7 @@
 #'
 #' ## What module 34 left unfinished
 #'
-#' Module 34 found associated loci and stopped. This module does the four
+#' Module 24 found associated loci and stopped. This module does the four
 #' things that come next, and each one rests on an assumption worth stating
 #' out loud.
 
@@ -230,7 +230,7 @@ cat(sprintf("\n  true h2 is 0.35 in the polygenic rows; the true intercept is
   1.00 without stratification and 1.35 with it.\n"))
 cat("\n  Read the lambda column first: it is elevated in BOTH the polygenic
   row and the stratified row, and cannot tell them apart. That is the
-  limitation Module 34 flagged and could not resolve.
+  limitation Module 24 flagged and could not resolve.
 
   The LDSC columns resolve it. The SLOPE responds to heritability, because
   real polygenic signal accumulates in proportion to how many variants a SNP

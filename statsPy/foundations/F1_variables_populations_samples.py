@@ -370,7 +370,7 @@ print(f"\nFigure written to {os.path.join(OUT, 'populations_and_samples.png')}")
 #     ("200 patients, 20,000 genes each", "patient", 200,
 #      "genes are VARIABLES, not units - 20,000 tests of n=200"),
 #     ("4 patients, 5,000 cells each", "patient", 4,
-#      "20,000 cells, n = 4. This is the single-cell trap (Module 31)"),
+#      "20,000 cells, n = 4. This is the single-cell trap (Module 21)"),
 # ]
 # print(f"  {'study':<38}{'unit':<10}{'n':>4}   why")
 # for study, unit, n, why in cases:

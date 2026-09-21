@@ -15,7 +15,7 @@
 # # Applied 44: Power and design for omics experiments
 #
 # **Curriculum link:** `stats.md` -> Topic 44, equations (44.1)-(44.3)
-# **Core modules used:** 01, 09, 29, 31
+# **Core modules used:** 01, 09, 40, 21
 #
 # ## The question
 #
@@ -248,7 +248,7 @@ print("""
   For a design that will be analysed with DESeq2, a mixed model or a
   pseudobulk pipeline, simulate THAT pipeline. A power calculation for a test
   you are not going to run is a number, not a plan. This is the ADEMP
-  discipline of Module 29 applied to design.""")
+  discipline of Module 40 applied to design.""")
 
 # %% [markdown]
 # ## 7. Figure

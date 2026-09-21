@@ -24,7 +24,7 @@
 #    a mixed model produces correct standard errors automatically.
 # 2. ICC (14.3) recovered as a variance-component ratio.
 # 3. **Partial pooling / BLUPs (14.5)-(14.6)**: shrinkage is the same formula as
-#    empirical Bayes (Module 23).
+#    empirical Bayes (Module 33).
 # 4. Why the boundary LRT for $\sigma_b^2=0$ is a $\chi^2$ **mixture**, not
 #    $\chi^2_1$.
 # 5. Mixed model vs pseudobulk aggregation: when they agree.
@@ -157,7 +157,7 @@ for j, nj in enumerate(sizes):
 print("\n  For n_j=2 the shrinkage factor is small, so the BLUP is pulled far")
 print("  toward 0 - the data barely constrain that donor. For n_j=200 lambda")
 print("  is nearly 1 and the BLUP tracks the raw mean. This is exactly the")
-print("  empirical-Bayes borrowing that limma applies across genes (Module 23).")
+print("  empirical-Bayes borrowing that limma applies across genes (Module 33).")
 
 # %% [markdown]
 # ## 4. The boundary problem: testing $\sigma_b^2=0$

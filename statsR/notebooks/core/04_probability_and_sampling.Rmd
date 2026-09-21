@@ -253,6 +253,6 @@ cat("\nFigure written to", file.path(OUT, "probability.png"), "\n")
    anticonservative.
 3. Prefer permutation when the design justifies exchangeability and n is
    small; prefer likelihood when a parametric mean-variance model is
-   credible and G is large enough to borrow strength (Module 23).
+   credible and G is large enough to borrow strength (Module 33).
 
 **Next:** `05_estimation_and_intervals.R`

@@ -17,7 +17,17 @@ import os
 import re
 
 TRACKS = ["foundations", "core", "bioinformatics", "exercises"]
-VALID = {f"{i:02d}" for i in range(25)} | {str(i) for i in range(30, 41)}
+def _valid_keys():
+    """Module ids that a dependency line may legitimately name.
+
+    Derived from the tree rather than hardcoded: a hardcoded range silently
+    drops edges for any module added later, which is how 41-46 went unlinked.
+    """
+    out = set()
+    for track in TRACKS:
+        for p in glob.glob(f"{ROOT}/statsPy/{track}/*.py"):
+            out.add(os.path.basename(p)[:-3].split("_")[0])
+    return out
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -106,23 +116,29 @@ def collect():
             if md:
                 blob = re.sub(r"\n#\s?", " ", md.group(1)).replace("`", "")
                 blob = re.sub(r"\([^)]*\)", " ", blob)          # drop glosses
-                deps = re.findall(r"\b([EF]\d|\d{2})\b", blob)
+                # 28a / 28b are module ids too, so the suffix must be allowed.
+                deps = re.findall(r"\b([EF]\d|\d{2}[ab]?)\b", blob)
             nodes.append(dict(key=key, id=base, track=track, order=order, title=title,
                               topic=topic, desc=desc, _deps=deps))
             by_key[key] = base
 
+    valid = _valid_keys()
     edges = []
     for n in nodes:
         for d in n.pop("_deps"):
-            if (d in VALID or re.match(r"^[EF]\d$", d)) and by_key.get(d, n["id"]) != n["id"]:
+            if (d in valid or re.match(r"^[EF]\d$", d)) and by_key.get(d, n["id"]) != n["id"]:
                 edges.append({"from": by_key[d], "to": n["id"], "kind": "dep"})
     for track in TRACKS:                                       # reading order
         seq = [n for n in nodes if n["track"] == track]
         edges += [{"from": a["id"], "to": b["id"], "kind": "order"}
                   for a, b in zip(seq, seq[1:])]
+    # Cross-track reading order: finish the beginner track before core, and
+    # the whole core track before the applied one. Within a track, the file
+    # order IS the reading order (see README section 6), because the numbers
+    # were chosen so that sorting them gives the teaching sequence.
     for a, b in [("F6_connecting_variables", "01_study_design_and_estimands"),
-                 ("24_diagnostics_and_reproducibility",
-                  "30_bulk_rnaseq_differential_expression")]:
+                 ("40_simulation_and_benchmarking",
+                  "20_bulk_rnaseq_differential_expression")]:
         edges.append({"from": a, "to": b, "kind": "order"})
 
     for n in nodes:                                            # escape once, here

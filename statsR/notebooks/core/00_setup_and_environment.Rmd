@@ -252,3 +252,5 @@ cat(strrep("=", 70), "\n", sep = "")
 1. `set.seed()` immediately precedes anything stochastic you will report.
 2. Every claim in a comment cites the equation number in `stats.md`.
 3. Nothing is installed at runtime; the container *is* the environment.
+
+**Next:** `01_study_design_and_estimands.R`

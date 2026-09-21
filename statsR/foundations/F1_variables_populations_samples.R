@@ -85,7 +85,7 @@ cat(sprintf("    levels(dat$treatment) = %s\n",
             paste(levels(dat$treatment), collapse = ", ")))
 cat("    The FIRST level is the reference that everything is compared against.\n")
 cat("    R orders levels alphabetically unless you say otherwise, which is a\n")
-cat("    frequent source of sign errors (see Module 30).\n")
+cat("    frequent source of sign errors (see Module 20).\n")
 
 #' ## 3. Population vs sample: the whole problem, made visible
 
@@ -277,7 +277,7 @@ cat("\nFigure written to", file.path(OUT, "populations_and_samples.png"), "\n")
 #   c("200 patients, 20,000 genes each", "patient", "200",
 #     "genes are VARIABLES, not units - 20,000 tests of n=200"),
 #   c("4 patients, 5,000 cells each", "patient", "4",
-#     "20,000 cells, n = 4. The single-cell trap (Module 31)"))
+#     "20,000 cells, n = 4. The single-cell trap (Module 21)"))
 # cat(sprintf("  %-38s%-10s%4s   %s\n", "study", "unit", "n", "why"))
 # for (cs in cases)
 #   cat(sprintf("  %-38s%-10s%4s   %s\n", cs[1], cs[2], cs[3], cs[4]))

@@ -213,7 +213,7 @@ cat(sprintf("  Randomised design, crude difference  : %.3f   <-- unbiased\n", es
 cat(sprintf("  Observational, crude difference      : %.3f   <-- biased\n", est_obs_crude))
 cat(sprintf("  Observational, adjusted for severity : %.3f   <-- recovered\n", est_obs_adj))
 cat("\nEq. (1.3) holds ONLY under randomisation. Adjustment worked here only\n")
-cat("because we happened to MEASURE the confounder - see Module 22.\n")
+cat("because we happened to MEASURE the confounder - see Module 32.\n")
 
 #' ## 6. Designs that cannot answer the question
 #'

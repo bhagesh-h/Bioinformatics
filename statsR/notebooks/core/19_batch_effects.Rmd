@@ -312,7 +312,7 @@ cat("\nFigure written to", file.path(OUT, "batch_effects.png"), "\n")
    include bridging samples, record every processing variable.
 2. **Diagnose before correcting.** If completely confounded, stop and say so.
 3. Adjust in the model (19.4) for INFERENCE; correct the matrix (19.2) only
-   for VISUALISATION -- and keep it inside CV folds (Module 21).
+   for VISUALISATION -- and keep it inside CV folds (Module 31).
 4. Always evaluate BOTH batch removal and biology preservation.
 
-**Next:** `20_survival_and_longitudinal.R`
+**Next:** `28a_survival_and_longitudinal.R`

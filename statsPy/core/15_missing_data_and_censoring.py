@@ -458,7 +458,7 @@ print("""
   data those neighbours include the test rows themselves. The test row is
   partly reconstructed from its own values before the model ever sees it.
 
-  This is the rule behind the classification in Module 21: what matters is not
+  This is the rule behind the classification in Module 31: what matters is not
   whether a step is 'preprocessing' but whether it BORROWS ACROSS ROWS. Wrap
   every learned step in a Pipeline so the fold boundary is enforced
   structurally rather than by discipline.""")

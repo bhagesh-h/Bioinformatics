@@ -1,0 +1,331 @@
+#' ---
+#' title: "Applied 27 - Spatial transcriptomics and spatial omics"
+#' output: html_document
+#' ---
+#'
+#' **Curriculum link:** `stats.md` -> Topic 27, equations (27.1)-(27.5)
+#'
+#' ## The central trap
+#'
+#' A tissue section contains thousands of spots but is **one observation of one
+#' patient**. Spot-level p-values describe that section, not the condition.
+
+#+ setup, message = FALSE
+suppressPackageStartupMessages(library(nlme))
+MODULE_NAME <- "27_spatial_omics"
+OUT <- file.path(Sys.getenv("STATS_OUT", unset = "results"), MODULE_NAME)
+dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+header <- function(txt) cat("\n", strrep("=", 72), "\n", txt, "\n",
+                            strrep("=", 72), "\n", sep = "")
+
+#' ## 1. Simulate replicated tissue sections
+
+#+ simulate
+header("1. A multi-patient spatial experiment")
+simulate_spatial <- function(n_patients = 8, side = 26, G = 250, n_svg = 30) {
+  coords0 <- expand.grid(x = 0:(side-1), y = 0:(side-1))
+  coords0$x <- coords0$x + (coords0$y %% 2)*0.5          # hexagonal-ish offset
+  n_spot <- nrow(coords0)
+  condition <- rep(c("ctrl","case"), each = n_patients/2)
+  is_svg <- c(rep(TRUE, n_svg), rep(FALSE, G - n_svg))
+  base <- exp(rnorm(G, -0.7, 1.1))
+  blocks <- list(); metas <- list()
+  for (pid in seq_len(n_patients)) {
+    patient_eff <- rnorm(G, 0, 0.45)                     # patient RANDOM effect
+    cx <- side/2 + rnorm(1, 0, 1.5); cy <- side/2 + rnorm(1, 0, 1.5)
+    radius <- side*0.22 * if (condition[pid] == "case") 1.45 else 1
+    dist_ <- sqrt((coords0$x - cx)^2 + (coords0$y - cy)^2)
+    in_domain <- as.numeric(dist_ < radius)
+    field <- exp(-(dist_/(side*0.25))^2)
+    depth <- rlnorm(n_spot, 0, 0.32)
+    mu <- outer(base*exp(patient_eff), depth)
+    mu[is_svg, ] <- mu[is_svg, ] * rep(exp(1.4*field), each = sum(is_svg))
+    Y <- matrix(rpois(length(mu), mu), nrow = G)
+    ids <- sprintf("P%02d_S%04d", pid-1, seq_len(n_spot))
+    dimnames(Y) <- list(sprintf("G%03d", seq_len(G)), ids)
+    blocks[[pid]] <- Y
+    metas[[pid]] <- data.frame(patient = sprintf("P%02d", pid-1),
+                               condition = condition[pid],
+                               x = coords0$x, y = coords0$y, in_domain = in_domain,
+                               total_umi = colSums(Y), row.names = ids)
+  }
+  list(counts = do.call(cbind, blocks), spot_meta = do.call(rbind, metas),
+       truth = data.frame(is_svg = is_svg, row.names = sprintf("G%03d", seq_len(G))))
+}
+set.seed(3701)
+sim <- simulate_spatial()
+counts <- sim$counts; spot_meta <- sim$spot_meta; truth <- sim$truth
+spot_meta$condition <- factor(spot_meta$condition, levels = c("ctrl","case"))
+stopifnot(identical(colnames(counts), rownames(spot_meta)))
+cat(sprintf("  %d genes x %s spots from %d patients\n", nrow(counts),
+            format(ncol(counts), big.mark=","), length(unique(spot_meta$patient))))
+cat(sprintf("  spots per section: %d\n", sum(spot_meta$patient == "P00")))
+cat(sprintf("  truly spatially variable genes: %d\n", sum(truth$is_svg)))
+cat(sprintf("\n  n for CONDITION-level claims = %d patients, NOT %s spots\n",
+            length(unique(spot_meta$patient)), format(ncol(counts), big.mark=",")))
+
+#' ## 2. Spatial autocorrelation: Moran's I, eq. (27.1)
+#'
+#' Note `E_0[I] = -1/(n-1)`, **not zero** - a routinely misreported detail.
+
+#+ morans
+header("2. Moran's I and Geary's C (27.1)-(27.2)")
+knn_weights <- function(coords, k = 6) {
+  d <- as.matrix(dist(coords)); diag(d) <- Inf
+  W <- matrix(0, nrow(d), nrow(d))
+  for (i in seq_len(nrow(d))) W[i, order(d[i, ])[1:k]] <- 1/k
+  W
+}
+morans_i <- function(x, W) {                                     # eq. (27.1)
+  n <- length(x); z <- x - mean(x)
+  den <- sum(z^2)
+  if (den == 0) return(0)
+  (n/sum(W)) * as.numeric(t(z) %*% W %*% z)/den
+}
+gearys_c <- function(x, W) {                                     # eq. (27.2)
+  n <- length(x); z <- x - mean(x); den <- sum(z^2)
+  if (den == 0) return(1)
+  num <- sum(W * outer(x, x, "-")^2)
+  ((n-1)*num)/(2*sum(W)*den)
+}
+p0 <- spot_meta$patient == "P00"
+coords0 <- as.matrix(spot_meta[p0, c("x","y")])
+W <- knn_weights(coords0, 6)
+n_spots0 <- nrow(coords0)
+cat(sprintf("  section P00: %d spots, k=6 neighbour graph\n", n_spots0))
+cat(sprintf("  E_0[Moran's I] = -1/(n-1) = %.5f  (NOT zero)\n", -1/(n_spots0-1)))
+cat("  E_0[Geary's C] = 1.0\n")
+sub <- counts[, p0]
+logn <- log1p(t(t(sub)/colSums(sub))*1e4)
+cat(sprintf("\n  %-22s%15s%15s\n", "gene class", "mean Moran I", "mean Geary C"))
+for (row_ in list(list("truly spatial (SVG)", which(truth$is_svg)[1:30]),
+                  list("non-spatial", which(!truth$is_svg)[1:30])))
+  cat(sprintf("  %-22s%15.4f%15.4f\n", row_[[1]],
+              mean(sapply(row_[[2]], function(g) morans_i(logn[g, ], W))),
+              mean(sapply(row_[[2]], function(g) gearys_c(logn[g, ], W)))))
+
+#' ## 3. Testing spatial variability by permutation
+
+#+ svg-test
+header("3. Permutation test for spatially variable genes")
+moran_perm_test <- function(x, W, n_perm = 99) {
+  obs <- morans_i(x, W)
+  null <- replicate(n_perm, morans_i(sample(x), W))
+  c(I = obs, p = (1 + sum(null >= obs))/(n_perm + 1))
+}
+set.seed(3702)
+genes_test <- c(which(truth$is_svg)[1:20], which(!truth$is_svg)[1:60])
+svg_res <- t(sapply(genes_test, function(g) moran_perm_test(logn[g, ], W)))
+rownames(svg_res) <- rownames(logn)[genes_test]
+q <- p.adjust(svg_res[, "p"], "BH")
+is_svg_t <- truth$is_svg[genes_test]
+cat(sprintf("  tested %d genes in ONE section\n", length(genes_test)))
+cat(sprintf("  detected: %d  (TP %d, FP %d)\n", sum(q < 0.05),
+            sum(q < 0.05 & is_svg_t), sum(q < 0.05 & !is_svg_t)))
+cat(sprintf("  sensitivity %.2f\n", sum(q < 0.05 & is_svg_t)/sum(is_svg_t)))
+cat("\n  This is a valid WITHIN-SECTION claim: 'this gene is spatially organised\n")
+cat("  in this tissue'. It says NOTHING about the condition.\n")
+cat("  NOTE we permute VALUES over LOCATIONS, which preserves both the\n")
+cat("  expression distribution and the tissue geometry. The normal\n")
+cat("  approximation for Moran's I is poor on irregular lattices.\n")
+
+#' ## 4. THE TRAP: spot-level condition testing
+
+#+ trap
+header("4. Spots are not patients (eq. 1.5 again)")
+dom_frac <- aggregate(in_domain ~ patient + condition, spot_meta, mean)
+d_spot <- spot_meta
+d_spot$case <- as.numeric(d_spot$condition == "case")
+m_spot <- glm(in_domain ~ case, data = d_spot, family = binomial())
+a <- dom_frac$in_domain[dom_frac$condition == "ctrl"]
+b <- dom_frac$in_domain[dom_frac$condition == "case"]
+p_patient <- t.test(a, b)$p.value
+m_mixed <- lme(in_domain ~ case, random = ~ 1 | patient, data = d_spot)
+cat(sprintf("  domain fraction: ctrl %.3f, case %.3f\n", mean(a), mean(b)))
+cat(sprintf("\n  %-44s%14s%14s\n", "analysis", "p-value", "effective n"))
+cat(sprintf("  %-44s%14.2e%14s\n", "spot-level logistic (WRONG)",
+            coef(summary(m_spot))["case", 4], format(nrow(d_spot), big.mark=",")))
+cat(sprintf("  %-44s%14.2e%14d\n", "per-patient summary, t-test", p_patient, nrow(dom_frac)))
+cat(sprintf("  %-44s%14.2e%14d\n", "mixed model, patient random effect",
+            summary(m_mixed)$tTable["case", "p-value"], nrow(dom_frac)))
+cat("\n  The spot-level p-value is astronomically small because it counts\n")
+cat("  thousands of spots as independent. The design effect (eq. 1.8) applies\n")
+cat("  exactly as it did for cells in Module 21.\n")
+cat("\n  NEGATIVE CONTROL - assign patients to arms at random:\n")
+set.seed(11)
+fake <- t(replicate(40, {
+  lv <- sample(rep(c("ctrl","case"), each = nrow(dom_frac)/2))
+  names(lv) <- dom_frac$patient
+  d2 <- spot_meta; d2$fake <- as.numeric(lv[as.character(d2$patient)] == "case")
+  ms <- glm(in_domain ~ fake, data = d2, family = binomial())
+  dd <- dom_frac; dd$fake <- lv[as.character(dd$patient)]
+  c(coef(summary(ms))["fake", 4] < 0.05,
+    t.test(dd$in_domain[dd$fake == "ctrl"], dd$in_domain[dd$fake == "case"])$p.value < 0.05)
+}))
+cat(sprintf("    spot-level false-positive rate    : %.0f%%   <- should be 5%%\n",
+            100*mean(fake[, 1])))
+cat(sprintf("    patient-level false-positive rate : %.0f%%\n", 100*mean(fake[, 2])))
+
+#' ## 5. Counts stay counts: the total-UMI offset, eq. (27.4)
+
+#+ offset
+header("5. Spot depth varies enormously - use an offset (27.4)")
+cat(sprintf("  total UMI per spot: %s - %s (%.1fx)\n",
+            format(min(spot_meta$total_umi), big.mark=","),
+            format(max(spot_meta$total_umi), big.mark=","),
+            max(spot_meta$total_umi)/max(min(spot_meta$total_umi), 1)))
+g_test <- 1
+d <- spot_meta[p0, ]; d$y <- as.numeric(sub[g_test, ])
+m_no <- glm(y ~ in_domain, data = d, family = poisson())
+m_off <- glm(y ~ in_domain, data = d, family = poisson(), offset = log(total_umi))
+cat(sprintf("\n  gene %s, domain effect:\n", rownames(counts)[g_test]))
+cat(sprintf("    without offset: %+.4f (p = %.2e)\n", coef(m_no)["in_domain"],
+            coef(summary(m_no))["in_domain", 4]))
+cat(sprintf("    with offset    : %+.4f (p = %.2e)\n", coef(m_off)["in_domain"],
+            coef(summary(m_off))["in_domain", 4]))
+cat("  Without the offset the model partly measures how deeply each spot was\n")
+cat("  sequenced, not how much RNA the cells contained (eq. 13.8).\n")
+
+#' ## 6. Edge effects and neighbourhood-graph sensitivity
+
+#+ edges
+header("6. Edge effects and the neighbour graph")
+d_edge <- pmin(coords0[,1] - min(coords0[,1]), max(coords0[,1]) - coords0[,1],
+               coords0[,2] - min(coords0[,2]), max(coords0[,2]) - coords0[,2])
+is_edge <- d_edge < 2
+Dm <- as.matrix(dist(coords0))
+n_within2 <- rowSums(Dm > 0 & Dm <= 2)
+cat(sprintf("  spots within 2 units: interior mean %.1f, edge mean %.1f\n",
+            mean(n_within2[!is_edge]), mean(n_within2[is_edge])))
+svg0 <- which(truth$is_svg)[1]
+cat(sprintf("\n  Moran's I for a spatial gene:\n"))
+cat(sprintf("    all spots             : %.4f\n", morans_i(logn[svg0, ], W)))
+cat(sprintf("    interior only (buffer): %.4f\n",
+            morans_i(logn[svg0, !is_edge], knn_weights(coords0[!is_edge, ], 6))))
+cat("  Boundary spots have fewer TRUE neighbours, which biases neighbourhood\n")
+cat("  statistics. Use a buffer zone, an edge-corrected estimator, or a\n")
+cat("  toroidal correction - and SAY WHICH.\n")
+cat(sprintf("\n  %16s%24s%22s\n", "k (neighbours)", "mean I, spatial genes",
+            "mean I, non-spatial"))
+for (k in c(4, 6, 12, 30)) {
+  Wk <- knn_weights(coords0, k)
+  cat(sprintf("  %16d%24.4f%22.4f\n", k,
+              mean(sapply(which(truth$is_svg)[1:15], function(g) morans_i(logn[g, ], Wk))),
+              mean(sapply(which(!truth$is_svg)[1:15], function(g) morans_i(logn[g, ], Wk)))))
+}
+cat("\n  Larger neighbourhoods detect broader gradients; smaller ones detect\n")
+cat("  fine structure. There is NO single correct k - report the choice and\n")
+cat("  show sensitivity to it.\n")
+
+#' ## 7. Figure
+
+#+ figure
+png(file.path(OUT, "spatial.png"), width = 1100, height = 800, res = 110)
+par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.5, 1))
+pal <- hcl.colors(30, "viridis")
+plot(coords0, pch = 15, cex = 0.5, col = pal[cut(logn[svg0, ], 30)],
+     xlab = "x", ylab = "y",
+     main = sprintf("SVG (Moran I = %.2f)", morans_i(logn[svg0, ], W)))
+ns <- which(!truth$is_svg)[1]
+plot(coords0, pch = 15, cex = 0.5, col = pal[cut(logn[ns, ], 30)],
+     xlab = "x", ylab = "y",
+     main = sprintf("Non-spatial gene (Moran I = %.2f)", morans_i(logn[ns, ], W)))
+hist(svg_res[!is_svg_t, "I"], breaks = 25, col = adjustcolor("steelblue", 0.6),
+     border = "white", xlim = range(svg_res[, "I"]),
+     main = "Eq. (27.1): the null is NOT zero", xlab = "Moran's I")
+hist(svg_res[is_svg_t, "I"], breaks = 25, col = adjustcolor("firebrick", 0.6),
+     border = "white", add = TRUE)
+abline(v = -1/(n_spots0-1), col = "red", lty = 2, lwd = 2)
+stripchart(in_domain ~ condition, data = dom_frac, vertical = TRUE, pch = 16,
+           cex = 1.4, col = c("steelblue","darkorange"),
+           ylab = "domain fraction per SECTION",
+           main = sprintf("Patient-level unit: n = %d, p = %.3f", nrow(dom_frac), p_patient))
+invisible(dev.off())
+cat("\nFigure written to", file.path(OUT, "spatial.png"), "\n")
+
+#' # PROBLEMS
+#'
+#' ### Problem 1: Colocalisation with a geometry-preserving null
+#'
+#' Label spots as cell type A or B and ask whether A and B are closer than
+#' chance. Permute LABELS, keeping COORDINATES fixed. Why not permute
+#' coordinates?
+
+#+ problem1
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# set.seed(21)
+# lab <- ifelse(spot_meta$in_domain[p0] > 0, "A", "B")
+# flip <- runif(length(lab)) < 0.12
+# lab <- ifelse(flip, ifelse(lab == "A", "B", "A"), lab)
+# cross_nn <- function(coords, lab) {
+#   A <- coords[lab == "A",, drop = FALSE]; B <- coords[lab == "B",, drop = FALSE]
+#   if (!nrow(A) || !nrow(B)) return(NA)
+#   mean(apply(as.matrix(dist(rbind(A, B)))[1:nrow(A), -(1:nrow(A)), drop = FALSE], 1, min))
+# }
+# obs <- cross_nn(coords0, lab)
+# null <- replicate(299, cross_nn(coords0, sample(lab)))
+# cat(sprintf("  observed mean A->nearest-B distance: %.3f\n", obs))
+# cat(sprintf("  permutation null mean              : %.3f\n", mean(null)))
+# cat(sprintf("  p (A closer to B than chance)      : %.4f\n",
+#             (1 + sum(null <= obs))/300))
+#
+# ## Permuting LABELS keeps the tissue's shape, density and any holes exactly as
+# ## observed, so the null asks precisely 'given this tissue geometry, is the
+# ## arrangement of labels special?'. Permuting COORDINATES would destroy the
+# ## geometry and test a different, uninteresting null (uniform tissue).
+# ## Colocalisation is also SCALE-DEPENDENT: repeat at several radii (a cross-K
+# ## function) rather than reporting a single number.
+
+#' ### Problem 2: Deconvolution uncertainty
+#'
+#' Simulate spot compositions as mixtures of two cell types, estimate by
+#' constrained least squares, and propagate the uncertainty into a downstream
+#' comparison. How much does ignoring it inflate significance?
+
+#+ problem2
+## ---- YOUR CODE HERE ----------------------------------------------------
+
+## ---- SOLUTION (uncomment to check) -------------------------------------
+# set.seed(31)
+# n_sp <- 300; G2 <- 60
+# prof <- matrix(rlnorm(G2*2), G2)
+# w_true <- rbeta(n_sp, 2, 2)
+# Yd <- prof %*% rbind(w_true, 1 - w_true) * matrix(rlnorm(G2*n_sp, 0, 0.35), G2)
+# w_hat <- apply(Yd, 2, function(y) {
+#   w <- c(0.5, 0.5)
+#   for (it in 1:400) {
+#     g <- crossprod(prof, prof %*% w - y)
+#     w <- pmax(w - 0.3*g/max(sum(prof^2), 1e-9), 0); if (sum(w) > 0) w <- w/sum(w)
+#   }
+#   w[1]
+# })
+# rmse <- sqrt(mean((w_hat - w_true)^2))
+# cat(sprintf("  correlation(estimated, true) = %.3f\n", cor(w_hat, w_true)))
+# cat(sprintf("  RMSE of the proportion estimate = %.3f\n", rmse))
+# grp <- rep(0:1, each = n_sp/2)                   # NO real difference
+# p_naive <- t.test(w_hat[grp == 0], w_hat[grp == 1])$p.value
+# boot_p <- replicate(200, {
+#   wb <- pmin(pmax(w_hat + rnorm(n_sp, 0, rmse), 0), 1)
+#   t.test(wb[grp == 0], wb[grp == 1])$p.value
+# })
+# cat(sprintf("  p treating w_hat as OBSERVED    : %.4f\n", p_naive))
+# cat(sprintf("  median p with uncertainty added : %.4f\n", median(boot_p)))
+#
+# ## Deconvolved proportions are ESTIMATES with real error, but almost every
+# ## downstream analysis treats them as measured quantities. Propagate the
+# ## uncertainty (bootstrap or posterior draws) or state plainly that you did
+# ## not - the same understatement-of-uncertainty issue as a batch-corrected
+# ## matrix in Module 19.
+
+#' ## What to take away
+#'
+#' 1. **Never treat spots or cells as patient replicates.**
+#' 2. Build the neighbourhood graph deliberately and report sensitivity to it.
+#' 3. Use permutation nulls that preserve tissue geometry.
+#' 4. Keep counts as counts with a total-UMI offset (27.4).
+#' 5. `E_0[Moran's I] = -1/(n-1)`, not 0.
+#' 6. Propagate deconvolution uncertainty, or say that you did not.
+#'
+#' **Next:** `28b_survival_biomarkers.R`

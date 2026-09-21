@@ -15,7 +15,7 @@
 # # Exercise 4: Answer a causal question from observational data
 #
 # **Curriculum link:** `stats.md` -> Topics 11, 15, 32, 34
-# **Core modules used:** 11, 22, 24, 38
+# **Core modules used:** 11, 32, 34, 28b
 #
 # ## The brief
 #

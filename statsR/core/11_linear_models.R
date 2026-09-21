@@ -99,7 +99,7 @@ for (k in 1:5) {
   cat(sprintf("    %-34s%9.4f%10.4f\n", sprintf("+ %d pure-noise predictors", k),
               summary(f_)$r.squared, summary(f_)$adj.r.squared))
 }
-cat("  Adjusted R^2 penalises p, but neither is a validation metric (Module 21).\n")
+cat("  Adjusted R^2 penalises p, but neither is a validation metric (Module 31).\n")
 
 #' ## 3. Confidence vs prediction intervals, eq. (11.8)-(11.9)
 
@@ -229,7 +229,7 @@ cat("\nFigure written to", file.path(OUT, "linear_models.png"), "\n")
 #' ## Decision rules (from `stats.md` Topic 11)
 #'
 #' 1. Write the design matrix and check its rank first.
-#' 2. Choose covariates from a causal diagram (Module 22), NOT stepwise
+#' 2. Choose covariates from a causal diagram (Module 32), NOT stepwise
 #'    selection, which invalidates all subsequent p-values.
 #' 3. Centre continuous predictors involved in interactions.
 #' 4. Prefer robust SEs over dropping data when variance is non-constant.

@@ -4,7 +4,7 @@ output: html_document
 ---
 
 **Curriculum link:** `stats.md` -> Topic 44, equations (44.1)-(44.3)
-**Core modules used:** 01, 09, 29, 31
+**Core modules used:** 01, 09, 40, 21
 
 ## The question
 
@@ -240,7 +240,7 @@ cat("\n  The closed form is in the right region but not reliable at small n,
   For a design that will be analysed with DESeq2, a mixed model or a
   pseudobulk pipeline, simulate THAT pipeline. A power calculation for a test
   you are not going to run is a number, not a plan. This is the ADEMP
-  discipline of Module 29 applied to design.\n")
+  discipline of Module 40 applied to design.\n")
 ```
 
 ## 7. Figure

@@ -15,7 +15,7 @@
 # # Applied 45: Longitudinal and time-varying causal inference
 #
 # **Curriculum link:** `stats.md` -> Topic 45, equations (45.1)-(45.4)
-# **Core modules used:** 14, 20, 22, 38
+# **Core modules used:** 14, 28a, 32, 28b
 #
 # ## The question
 #
@@ -185,7 +185,7 @@ def msm_weights(d, stabilise=True, truncate=None):
 
 # A single study of 6,000 is noisy, so average over replicate studies: the
 # question here is whether each estimator is BIASED, which is a property of
-# the recipe rather than of one dataset (Module 29).
+# the recipe rather than of one dataset (Module 40).
 acc = {k: [] for k in ("noadj_a0", "noadj_a1", "adj_a0", "adj_a1",
                        "msm_a0", "msm_a1")}
 for i in range(25):
@@ -320,11 +320,11 @@ print(f"    p = {naive.pvalue:.2e}")
 print("""
   To be classified as 'ever ill' you must first survive long enough to become
   ill, so the comparison is contaminated by immortal time, exactly as in
-  Module 38. Illness is a STATE ENTERED AT A TIME, not a baseline attribute.
+  Module 28b. Illness is a STATE ENTERED AT A TIME, not a baseline attribute.
 
   The multi-state formulation keeps each transition separate: each intensity
   in (45.4) is estimated on the people actually at risk of that transition at
-  that moment. Competing risks (Module 38) is the special case where the
+  that moment. Competing risks (Module 28b) is the special case where the
   states are absorbing and there is no recovery.""")
 
 # Show the fix: time-dependent covariate.
@@ -458,7 +458,7 @@ print(f"\nFigure written to {os.path.join(OUT, 'longitudinal_causal.png')}")
 # # variable influences treatment, the weights are computed from the wrong
 # # model and the bias returns.
 # #
-# # This is the honest limitation and it mirrors Module 22 and exercise E4:
+# # This is the honest limitation and it mirrors Module 32 and exercise E4:
 # # g-methods solve the STRUCTURAL problem of a mediator-confounder, they do
 # # not solve ignorability. No weighting scheme can adjust for something you
 # # did not measure.
@@ -506,7 +506,7 @@ print(f"\nFigure written to {os.path.join(OUT, 'longitudinal_causal.png')}")
 # # Splitting the follow-up assigns each person-day to the state they were
 # # actually in, and recovers the true ratio.
 # #
-# # The general rule, which covers Module 38's landmark analysis and this
+# # The general rule, which covers Module 28b's landmark analysis and this
 # # module's multi-state models: a variable measured AFTER baseline must enter
 # # the model as time-dependent, or the analysis must start the clock at the
 # # moment the variable is known.

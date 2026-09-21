@@ -221,7 +221,7 @@ cat(sprintf("\n  %-26s%18s\n", "mean-abundance quintile", "mean missingness"))
 for (lv in levels(qs))
   cat(sprintf("  %-26s%18.3f\n", lv, mean(miss_rate[ok][qs == lv])))
 cat("\n  Treat MNAR and MAR features DIFFERENTLY. Applying one imputer to both\n")
-cat("  is the standard mistake (stats.md Topic 25, Module 35).\n")
+cat("  is the standard mistake (stats.md Topic 25, Module 25).\n")
 
 #' ## 5. Imputing before cross-validation leaks information
 #'
@@ -304,7 +304,7 @@ cat("
   those neighbours include the test rows themselves. The test row is partly
   reconstructed from its own values before the model ever sees it.
 
-  This is the rule behind the classification in Module 21: what matters is not
+  This is the rule behind the classification in Module 31: what matters is not
   whether a step is 'preprocessing' but whether it BORROWS ACROSS ROWS. Fit
   every learned step inside the fold so the boundary is enforced structurally
   rather than by discipline.\n")

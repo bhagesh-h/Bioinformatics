@@ -155,85 +155,130 @@ the commonest source of dimension errors in omics code.
 
 ## Module map
 
-### Foundations: start here if you are new to statistics
+Every topic below is implemented by a runnable module in both languages, and
+**a module's number is its topic number**. Topic 24 is
+`bioinformatics/24_gwas_association`; Topic 36 is
+`core/36_modern_multiple_testing`. Prefix with `statsPy/` and `.py`, or with
+`statsR/` and `.R`, and you have the file.
+
+That is the whole cross-reference scheme: no lookup table is needed to get
+from this document to the code, or back. Each topic states its module under
+the heading, and each module states its topic and equation range in the header
+comment, so either file tells you where the other one is.
+
+There are exactly three exceptions:
+
+| Exception | Why |
+|---|---|
+| `28a` and `28b` | Topic 28 is long enough to need two modules: `core/28a_survival_and_longitudinal` builds the machinery, `bioinformatics/28b_survival_biomarkers` applies it to molecular data. |
+| `34` covers Topics 34 and 35 | Diagnostics and reproducible workflows are taught as one module, because the second is what you do with the first. |
+| `00` | Setup and house rules. It has no topic of its own; it leans on Topic 35. |
+
+### Reading order
+
+The numbers follow `stats.md`, so they are **not** the order you read them in.
+The applied modules are numbered 20-30 because that is where their topics sit,
+but they come after the core track. This is the order:
+
+<!-- BEGIN crossref:reading-order -->
+| Stage | Modules, in order | Exercise |
+|---|---|---|
+| Absolute basics | `F1` `F2` `F3` `F4` `F5` `F6` | - |
+| Foundations | `00` `01` `02` `03` `04` `05` `06` `07` `08` `09` | `E1` design audit |
+| Models | `10` `11` `12` `13` `14` `15` | - |
+| High-dimensional | `16` `17` `18` `19` | - |
+| Inference and validation | `28a` `31` `32` `33` `34` | `E3` prediction audit, `E4` causal question |
+| Modern core methods | `36` `37` `38` `39` `40` | - |
+| Applied assays | `20` `21` `22` `23` `24` `25` `26` `27` `28b` `29` `30` | `E2` RNA-seq end to end |
+| Advanced applied | `41` `42` `43` `44` `45` `46` | - |
+<!-- END crossref:reading-order -->
+
+### Part 0: start here if you are new to statistics
 
 `Part 0` of this document has no prerequisites and assumes no mathematics.
 These six modules are its runnable companions.
 
-| Part 0 section | Python | R |
+<!-- BEGIN crossref:foundations -->
+| # | Module | Covers |
 |---|---|---|
-| §0.1-§0.3 variables, populations, samples | `statsPy/foundations/F1_variables_populations_samples.py` | `statsR/foundations/F1_variables_populations_samples.R` |
-| §0.4 probability and independence | `statsPy/foundations/F2_probability_basics.py` | `statsR/foundations/F2_probability_basics.R` |
-| §0.5 distributions | `statsPy/foundations/F3_distributions.py` | `statsR/foundations/F3_distributions.R` |
-| §0.6 estimates, standard errors, the CLT | `statsPy/foundations/F4_estimates_and_standard_errors.py` | `statsR/foundations/F4_estimates_and_standard_errors.R` |
-| §0.7-§0.8 confidence intervals and p-values | `statsPy/foundations/F5_confidence_intervals_and_pvalues.py` | `statsR/foundations/F5_confidence_intervals_and_pvalues.R` |
-| §0.9 connecting variables, the four causal roles | `statsPy/foundations/F6_connecting_variables.py` | `statsR/foundations/F6_connecting_variables.R` |
+| `F1` | `F1_variables_populations_samples` | §0.1-§0.3 |
+| `F2` | `F2_probability_basics` | §0.4 |
+| `F3` | `F3_distributions` | §0.5 |
+| `F4` | `F4_estimates_and_standard_errors` | §0.6 |
+| `F5` | `F5_confidence_intervals_and_pvalues` | §0.7-§0.8 |
+| `F6` | `F6_connecting_variables` | §0.9 |
+<!-- END crossref:foundations -->
 
-### Core and applied
+### Topic to module
 
-| stats.md topic | Python module | R module |
+<!-- BEGIN crossref:concordance -->
+| `stats.md` topic | Title | Module (add `statsPy/`+`.py` or `statsR/`+`.R`) |
 |---|---|---|
-| 1 Study design | `statsPy/core/01_study_design_and_estimands.py` | `statsR/core/01_study_design_and_estimands.R` |
-| 2 Data structures | `statsPy/core/02_data_structures_and_scales.py` | `statsR/core/02_data_structures_and_scales.R` |
-| 3 EDA | `statsPy/core/03_exploratory_data_analysis.py` | `statsR/core/03_exploratory_data_analysis.R` |
-| 4 Probability | `statsPy/core/04_probability_and_sampling.py` | `statsR/core/04_probability_and_sampling.R` |
-| 5 Estimation | `statsPy/core/05_estimation_and_intervals.py` | `statsR/core/05_estimation_and_intervals.R` |
-| 6 p-values | `statsPy/core/06_hypothesis_tests_and_pvalues.py` | `statsR/core/06_hypothesis_tests_and_pvalues.R` |
-| 7 t / rank / permutation | `statsPy/core/07_ttests_ranks_permutation.py` | `statsR/core/07_ttests_ranks_permutation.R` |
-| 8 Multiple testing | `statsPy/core/08_multiple_testing.py` | `statsR/core/08_multiple_testing.R` |
-| 9 Power | `statsPy/core/09_power_and_sample_size.py` | `statsR/core/09_power_and_sample_size.R` |
-| 10 Correlation | `statsPy/core/10_correlation_and_dependence.py` | `statsR/core/10_correlation_and_dependence.R` |
-| 11 Linear models | `statsPy/core/11_linear_models.py` | `statsR/core/11_linear_models.R` |
-| 12 ANOVA / contrasts | `statsPy/core/12_anova_and_contrasts.py` | `statsR/core/12_anova_and_contrasts.R` |
-| 13 GLMs | `statsPy/core/13_generalized_linear_models.py` | `statsR/core/13_generalized_linear_models.R` |
-| 14 Mixed models | `statsPy/core/14_mixed_models.py` | `statsR/core/14_mixed_models.R` |
-| 15 Missing data | `statsPy/core/15_missing_data_and_censoring.py` | `statsR/core/15_missing_data_and_censoring.R` |
-| 16 Matrix algebra | `statsPy/core/16_matrix_algebra.py` | `statsR/core/16_matrix_algebra.R` |
-| 17 PCA | `statsPy/core/17_pca.py` | `statsR/core/17_pca.R` |
-| 18 Clustering | `statsPy/core/18_distances_and_clustering.py` | `statsR/core/18_distances_and_clustering.R` |
-| 19 Batch effects | `statsPy/core/19_batch_effects.py` | `statsR/core/19_batch_effects.R` |
-| 28 Survival / longitudinal | `statsPy/core/20_survival_and_longitudinal.py` | `statsR/core/20_survival_and_longitudinal.R` |
-| 31 Prediction | `statsPy/core/21_prediction_and_validation.py` | `statsR/core/21_prediction_and_validation.R` |
-| 32 Causal inference | `statsPy/core/22_causal_inference.py` | `statsR/core/22_causal_inference.R` |
-| 33 Bayes / shrinkage | `statsPy/core/23_bayesian_and_shrinkage.py` | `statsR/core/23_bayesian_and_shrinkage.R` |
-| 34-35 Diagnostics, reproducibility | `statsPy/core/24_diagnostics_and_reproducibility.py` | `statsR/core/24_diagnostics_and_reproducibility.R` |
-| 20 Bulk RNA-seq | `statsPy/bioinformatics/30_bulk_rnaseq_differential_expression.py` | `statsR/bioinformatics/30_bulk_rnaseq_differential_expression.R` |
-| 21 Single-cell | `statsPy/bioinformatics/31_single_cell_pseudobulk.py` | `statsR/bioinformatics/31_single_cell_pseudobulk.R` |
-| 22 Cytometry | `statsPy/bioinformatics/32_cytometry_differential_abundance.py` | `statsR/bioinformatics/32_cytometry_differential_abundance.R` |
-| 23 Methylation | `statsPy/bioinformatics/33_methylation_epigenomics.py` | `statsR/bioinformatics/33_methylation_epigenomics.R` |
-| 24 GWAS | `statsPy/bioinformatics/34_gwas_association.py` | `statsR/bioinformatics/34_gwas_association.R` |
-| 25 Proteomics | `statsPy/bioinformatics/35_proteomics_missing_values.py` | `statsR/bioinformatics/35_proteomics_missing_values.R` |
-| 26 Microbiome | `statsPy/bioinformatics/36_microbiome_compositional.py` | `statsR/bioinformatics/36_microbiome_compositional.R` |
-| 27 Spatial | `statsPy/bioinformatics/37_spatial_omics.py` | `statsR/bioinformatics/37_spatial_omics.R` |
-| 28 Clinical survival | `statsPy/bioinformatics/38_survival_biomarkers.py` | `statsR/bioinformatics/38_survival_biomarkers.R` |
-| 29 Enrichment | `statsPy/bioinformatics/39_gene_set_enrichment.py` | `statsR/bioinformatics/39_gene_set_enrichment.R` |
-| 30 Networks / multi-omics | `statsPy/bioinformatics/40_networks_and_multiomics.py` | `statsR/bioinformatics/40_networks_and_multiomics.R` |
-| 36 Modern multiple testing | `statsPy/core/25_modern_multiple_testing.py` | `statsR/core/25_modern_multiple_testing.R` |
-| 37 Measurement error, RTM | `statsPy/core/26_measurement_error_and_regression.py` | `statsR/core/26_measurement_error_and_regression.R` |
-| 38 Meta-analysis | `statsPy/core/27_meta_analysis.py` | `statsR/core/27_meta_analysis.R` |
-| 39 Conformal prediction | `statsPy/core/28_conformal_prediction.py` | `statsR/core/28_conformal_prediction.R` |
-| 40 Simulation and benchmarking | `statsPy/core/29_simulation_and_benchmarking.py` | `statsR/core/29_simulation_and_benchmarking.R` |
-| 41 Trajectory and pseudotime | `statsPy/bioinformatics/41_trajectory_and_pseudotime.py` | `statsR/bioinformatics/41_trajectory_and_pseudotime.R` |
-| 42 Deconvolution, integration | `statsPy/bioinformatics/42_deconvolution_and_integration.py` | `statsR/bioinformatics/42_deconvolution_and_integration.R` |
-| 43 Advanced statistical genetics | `statsPy/bioinformatics/43_advanced_statistical_genetics.py` | `statsR/bioinformatics/43_advanced_statistical_genetics.R` |
-| 44 Power and design for omics | `statsPy/bioinformatics/44_power_and_design_for_omics.py` | `statsR/bioinformatics/44_power_and_design_for_omics.R` |
-| 45 Longitudinal causal | `statsPy/bioinformatics/45_longitudinal_causal.py` | `statsR/bioinformatics/45_longitudinal_causal.R` |
-| 46 Interpretation, pretrained models | `statsPy/bioinformatics/46_interpretation_and_foundation_models.py` | `statsR/bioinformatics/46_interpretation_and_foundation_models.R` |
+| 1 | Statistical thinking for biological experiments | `core/01_study_design_and_estimands` |
+| 2 | Data structures and measurement scales | `core/02_data_structures_and_scales` |
+| 3 | Exploratory data analysis | `core/03_exploratory_data_analysis` |
+| 4 | Probability models and sampling distributions | `core/04_probability_and_sampling` |
+| 5 | Estimation, effect sizes, and confidence intervals | `core/05_estimation_and_intervals` |
+| 6 | Hypothesis tests and p-values | `core/06_hypothesis_tests_and_pvalues` |
+| 7 | t-tests, rank tests, and permutation tests | `core/07_ttests_ranks_permutation` |
+| 8 | Multiple testing and selective inference | `core/08_multiple_testing` |
+| 9 | Power, sample size, and design optimisation | `core/09_power_and_sample_size` |
+| 10 | Correlation and dependence | `core/10_correlation_and_dependence` |
+| 11 | Linear regression as the core framework | `core/11_linear_models` |
+| 12 | ANOVA, factorial designs, and contrasts | `core/12_anova_and_contrasts` |
+| 13 | Generalised linear models | `core/13_generalized_linear_models` |
+| 14 | Mixed, multilevel, and repeated-measures models | `core/14_mixed_models` |
+| 15 | Missing data, censoring, and measurement limits | `core/15_missing_data_and_censoring` |
+| 16 | Matrix algebra for high-dimensional biology | `core/16_matrix_algebra` |
+| 17 | Principal component analysis | `core/17_pca` |
+| 18 | Distances, clustering, and embeddings | `core/18_distances_and_clustering` |
+| 19 | Batch effects and unwanted variation | `core/19_batch_effects` |
+| 20 | Bulk RNA-seq differential expression | `bioinformatics/20_bulk_rnaseq_differential_expression` |
+| 21 | Single-cell RNA-seq: replicated inference | `bioinformatics/21_single_cell_pseudobulk` |
+| 22 | Flow, mass, and imaging cytometry | `bioinformatics/22_cytometry_differential_abundance` |
+| 23 | DNA methylation and epigenomics | `bioinformatics/23_methylation_epigenomics` |
+| 24 | Genotypes, GWAS, and statistical genetics | `bioinformatics/24_gwas_association` |
+| 25 | Proteomics and metabolomics | `bioinformatics/25_proteomics_missing_values` |
+| 26 | Microbiome and compositional data | `bioinformatics/26_microbiome_compositional` |
+| 27 | Spatial transcriptomics and spatial omics | `bioinformatics/27_spatial_omics` |
+| 28 | Time-course, longitudinal, and survival data | `core/28a_survival_and_longitudinal`<br>`bioinformatics/28b_survival_biomarkers` |
+| 29 | Functional enrichment and pathway statistics | `bioinformatics/29_gene_set_enrichment` |
+| 30 | Networks and multivariate integration | `bioinformatics/30_networks_and_multiomics` |
+| 31 | Statistical learning and biomarker prediction | `core/31_prediction_and_validation` |
+| 32 | Causal inference for observational bioinformatics | `core/32_causal_inference` |
+| 33 | Bayesian reasoning and hierarchical shrinkage | `core/33_bayesian_and_shrinkage` |
+| 34 | Model diagnostics and sensitivity analysis | `core/34_diagnostics_and_reproducibility` |
+| 35 | Reproducible statistical workflows | `core/00_setup_and_environment`<br>`core/34_diagnostics_and_reproducibility` |
+| 36 | Multiple testing beyond Benjamini-Hochberg | `core/36_modern_multiple_testing` |
+| 37 | Measurement error, attenuation, and regression to the mean | `core/37_measurement_error_and_regression` |
+| 38 | Meta-analysis and evidence synthesis | `core/38_meta_analysis` |
+| 39 | Conformal prediction and distribution-free uncertainty | `core/39_conformal_prediction` |
+| 40 | Designing a simulation study | `core/40_simulation_and_benchmarking` |
+| 41 | Trajectory inference and pseudotime | `bioinformatics/41_trajectory_and_pseudotime` |
+| 42 | Deconvolution, integration, and zero-inflation | `bioinformatics/42_deconvolution_and_integration` |
+| 43 | Fine-mapping, colocalisation, and heritability | `bioinformatics/43_advanced_statistical_genetics` |
+| 44 | Power and design for omics experiments | `bioinformatics/44_power_and_design_for_omics` |
+| 45 | Longitudinal and time-varying causal inference | `bioinformatics/45_longitudinal_causal` |
+| 46 | Model interpretation and pretrained models | `bioinformatics/46_interpretation_and_foundation_models` |
+<!-- END crossref:concordance -->
 
 ### Integrative exercises
 
 Each exercise combines several topics into one realistic problem, with the
 worked solution commented out beneath every question.
 
-| Topics combined | Python | R |
+<!-- BEGIN crossref:exercises -->
+| # | Exercise | Topics combined |
 |---|---|---|
-| 1, 7, 9, 14, 19 - design audit | `statsPy/exercises/E1_design_audit.py` | `statsR/exercises/E1_design_audit.R` |
-| 8, 13, 20, 29 - RNA-seq end to end | `statsPy/exercises/E2_rnaseq_end_to_end.py` | `statsR/exercises/E2_rnaseq_end_to_end.R` |
-| 18, 21, 31 - prediction audit | `statsPy/exercises/E3_prediction_audit.py` | `statsR/exercises/E3_prediction_audit.R` |
-| 11, 15, 32, 34 - causal question | `statsPy/exercises/E4_causal_question.py` | `statsR/exercises/E4_causal_question.R` |
+| `E1` | `E1_design_audit` | 1, 7, 9, 14, 19 |
+| `E2` | `E2_rnaseq_end_to_end` | 8, 13, 20, 29 |
+| `E3` | `E3_prediction_audit` | 18, 21, 31 |
+| `E4` | `E4_causal_question` | 11, 15, 32, 34 |
+<!-- END crossref:exercises -->
 
 See `README.md` for how to run these, and `tools/check_solutions.sh` for the
-runner that executes every shipped solution.
+runner that executes every shipped solution. The tables above are generated by
+`tools/build_crossref.py`; edit that, not them.
 
 
 # Part 0: Starting from zero
@@ -827,7 +872,7 @@ document follows that position throughout.
 
 The protection against all four is the same: **decide the analysis before seeing
 the outcome**, and report everything you tried. Topics 8 and 34 make this
-concrete, and Module 24 shows what a pre-specified analysis plan looks like.
+concrete, and Module 34 shows what a pre-specified analysis plan looks like.
 
 
 ## 0.9 How statistics connects variables
@@ -1010,7 +1055,7 @@ You now have the vocabulary for the rest of this document.
 | Go deeper on p-values | [Topic 6](#topic-6-hypothesis-tests-and-p-values) | `06_hypothesis_tests_and_pvalues` |
 | Handle thousands of tests | [Topic 8](#topic-8-multiple-testing-and-selective-inference) | `08_multiple_testing` |
 | Master eq. (0.16) | [Topic 11](#topic-11-linear-regression-as-the-core-framework) | `11_linear_models` |
-| Reason about causes | [Topic 32](#topic-32-causal-inference-for-observational-bioinformatics) | `22_causal_inference` |
+| Reason about causes | [Topic 32](#topic-32-causal-inference-for-observational-bioinformatics) | `32_causal_inference` |
 
 A reasonable first pass: read this Part, run `F1`-`F6`, then read Topic 1 and
 run its module. Topic 1 is where the beginner material and the professional
@@ -1021,7 +1066,7 @@ material meet, and it is the topic that matters most.
 
 ## Topic 1: Statistical thinking for biological experiments
 
-**Module:** `01_study_design_and_estimands`, **Prerequisite for:** everything
+**Module:** `core/01_study_design_and_estimands`
 
 ### The question
 
@@ -1132,7 +1177,7 @@ With $n = 3$ donors, $m = 500$ cells, $\rho = 0.05$: $n_{\text{eff}} \approx 57.
 
 ## Topic 2: Data structures and measurement scales
 
-**Module:** `02_data_structures_and_scales`
+**Module:** `core/02_data_structures_and_scales`
 
 ### The question
 
@@ -1230,7 +1275,7 @@ is developed in Topic 26.
 
 ## Topic 3: Exploratory data analysis
 
-**Module:** `03_exploratory_data_analysis`
+**Module:** `core/03_exploratory_data_analysis`
 
 ### The question
 
@@ -1314,7 +1359,7 @@ the test has no power when you need it and excessive power when you do not.
 
 ## Topic 4: Probability models and sampling distributions
 
-**Module:** `04_probability_and_sampling`
+**Module:** `core/04_probability_and_sampling`
 
 ### The question
 
@@ -1436,7 +1481,7 @@ p-value is $1/(B+1)$ - so $B \ge 999$ if you want to reach $0.001$.
 
 ## Topic 5: Estimation, effect sizes, and confidence intervals
 
-**Module:** `05_estimation_and_intervals`
+**Module:** `core/05_estimation_and_intervals`
 
 ### The question
 
@@ -1587,7 +1632,7 @@ absence of an effect; $p > 0.05$ is not evidence of no effect.
 
 ## Topic 6: Hypothesis tests and p-values
 
-**Module:** `06_hypothesis_tests_and_pvalues`
+**Module:** `core/06_hypothesis_tests_and_pvalues`
 
 ### The question
 
@@ -1683,7 +1728,7 @@ $$Z = \frac{\sum_k w_k \Phi^{-1}(1 - p_k)}{\sqrt{\sum_k w_k^2}}, \qquad w_k \pro
 
 ## Topic 7: t-tests, rank tests, and permutation tests
 
-**Module:** `07_ttests_ranks_permutation`
+**Module:** `core/07_ttests_ranks_permutation`
 
 ### The question
 
@@ -1787,7 +1832,7 @@ dependence structure that the null must preserve.
 
 ## Topic 8: Multiple testing and selective inference
 
-**Module:** `08_multiple_testing`
+**Module:** `core/08_multiple_testing`
 
 ### The question
 
@@ -1911,7 +1956,7 @@ but *different* claim from a global one. State which you mean.
 
 ## Topic 9: Power, sample size, and design optimisation
 
-**Module:** `09_power_and_sample_size`
+**Module:** `core/09_power_and_sample_size`
 
 ### The question
 
@@ -2021,7 +2066,7 @@ $\pm 1.5\%$ - adequate.
 
 ## Topic 10: Correlation and dependence
 
-**Module:** `10_correlation_and_dependence`
+**Module:** `core/10_correlation_and_dependence`
 
 ### The question
 
@@ -2130,7 +2175,7 @@ $\mathbf{S}$ is singular and $\mathbf{S}^{-1}$ in (10.6) does not exist.
 
 ## Topic 11: Linear regression as the core framework
 
-**Module:** `11_linear_models`
+**Module:** `core/11_linear_models`
 
 ### The question
 
@@ -2268,7 +2313,7 @@ all 20,000 genes.
 
 ## Topic 12: ANOVA, factorial designs, and contrasts
 
-**Module:** `12_anova_and_contrasts`
+**Module:** `core/12_anova_and_contrasts`
 
 ### The question
 
@@ -2389,7 +2434,7 @@ valid.
 
 ## Topic 13: Generalised linear models
 
-**Module:** `13_generalized_linear_models`
+**Module:** `core/13_generalized_linear_models`
 
 ### The question
 
@@ -2524,7 +2569,7 @@ construction.
 
 ## Topic 14: Mixed, multilevel, and repeated-measures models
 
-**Module:** `14_mixed_models`
+**Module:** `core/14_mixed_models`
 
 ### The question
 
@@ -2649,7 +2694,7 @@ expression.[^sc1][^sc2][^sc3]
 
 ## Topic 15: Missing data, censoring, and measurement limits
 
-**Module:** `15_missing_data_and_censoring`
+**Module:** `core/15_missing_data_and_censoring`
 
 ### The question
 
@@ -2745,7 +2790,7 @@ into training and inflates apparent performance. It must go inside the fold
 
 ## Topic 16: Matrix algebra for high-dimensional biology
 
-**Module:** `16_matrix_algebra`
+**Module:** `core/16_matrix_algebra`
 
 ### The question
 
@@ -2856,7 +2901,7 @@ gives their independence.
 
 ## Topic 17: Principal component analysis
 
-**Module:** `17_pca`
+**Module:** `core/17_pca`
 
 ### The question
 
@@ -2964,7 +3009,7 @@ have a batch problem (Topic 19), not a discovery.
 
 ## Topic 18: Distances, clustering, and embeddings
 
-**Module:** `18_distances_and_clustering`
+**Module:** `core/18_distances_and_clustering`
 
 ### The question
 
@@ -3100,7 +3145,7 @@ selective-inference tests that condition on the clustering event.
 
 ## Topic 19: Batch effects and unwanted variation
 
-**Module:** `19_batch_effects`
+**Module:** `core/19_batch_effects`
 
 ### The question
 
@@ -3202,7 +3247,7 @@ of integration methods.
 
 ## Topic 20: Bulk RNA-seq differential expression
 
-**Module:** `30_bulk_rnaseq_differential_expression`
+**Module:** `bioinformatics/20_bulk_rnaseq_differential_expression`
 
 ### The question
 
@@ -3329,7 +3374,7 @@ and Cook's distance for count outliers.
 
 ## Topic 21: Single-cell RNA-seq: replicated inference
 
-**Module:** `31_single_cell_pseudobulk`
+**Module:** `bioinformatics/21_single_cell_pseudobulk`
 
 ### The question
 
@@ -3414,7 +3459,7 @@ counts with batch in the design (19.4).
 
 ## Topic 22: Flow, mass, and imaging cytometry
 
-**Module:** `32_cytometry_differential_abundance`
+**Module:** `bioinformatics/22_cytometry_differential_abundance`
 
 ### The question
 
@@ -3475,7 +3520,7 @@ marker panel with 3 contrasts is 900 hypotheses.
 
 ## Topic 23: DNA methylation and epigenomics
 
-**Module:** `33_methylation_epigenomics`
+**Module:** `bioinformatics/23_methylation_epigenomics`
 
 ### The question
 
@@ -3559,7 +3604,7 @@ phenotype re-introduces the age signal you meant to remove.
 
 ## Topic 24: Genotypes, GWAS, and statistical genetics
 
-**Module:** `34_gwas_association`
+**Module:** `bioinformatics/24_gwas_association`
 
 ### The question
 
@@ -3673,7 +3718,7 @@ estimators are sensitivity analyses for horizontal pleiotropy, not proofs.
 
 ## Topic 25: Proteomics and metabolomics
 
-**Module:** `35_proteomics_missing_values`
+**Module:** `bioinformatics/25_proteomics_missing_values`
 
 ### The question
 
@@ -3744,7 +3789,7 @@ a common reference channel.
 
 ## Topic 26: Microbiome and compositional data
 
-**Module:** `36_microbiome_compositional`
+**Module:** `bioinformatics/26_microbiome_compositional`
 
 ### The question
 
@@ -3839,7 +3884,7 @@ operate on log-ratios and estimate a sparse precision matrix (10.6).
 
 ## Topic 27: Spatial transcriptomics and spatial omics
 
-**Module:** `37_spatial_omics`
+**Module:** `bioinformatics/27_spatial_omics`
 
 ### The question
 
@@ -3923,7 +3968,7 @@ edge-corrected estimator.
 
 ## Topic 28: Time-course, longitudinal, and survival data
 
-**Module:** `20_survival_and_longitudinal` (core) and `38_survival_biomarkers` (applied)
+**Module:** `core/28a_survival_and_longitudinal`, `bioinformatics/28b_survival_biomarkers`
 
 ### The question
 
@@ -4064,7 +4109,7 @@ validate externally.
 
 ## Topic 29: Functional enrichment and pathway statistics
 
-**Module:** `39_gene_set_enrichment`
+**Module:** `bioinformatics/29_gene_set_enrichment`
 
 ### The question
 
@@ -4161,7 +4206,7 @@ unmapped genes silently shrink the universe.
 
 ## Topic 30: Networks and multivariate integration
 
-**Module:** `40_networks_and_multiomics`
+**Module:** `bioinformatics/30_networks_and_multiomics`
 
 ### The question
 
@@ -4246,7 +4291,7 @@ and will always be produced. Minimum standards:
 
 ## Topic 31: Statistical learning and biomarker prediction
 
-**Module:** `21_prediction_and_validation`
+**Module:** `core/31_prediction_and_validation`
 
 ### The question
 
@@ -4381,7 +4426,7 @@ predictor, no matter which algorithm is used.
 
 ## Topic 32: Causal inference for observational bioinformatics
 
-**Module:** `22_causal_inference`
+**Module:** `core/32_causal_inference`
 
 ### The question
 
@@ -4492,7 +4537,7 @@ immortal time bias (Topic 28).
 
 ## Topic 33: Bayesian reasoning and hierarchical shrinkage
 
-**Module:** `23_bayesian_and_shrinkage`
+**Module:** `core/33_bayesian_and_shrinkage`
 
 ### The question
 
@@ -4600,7 +4645,7 @@ inspection of trace plots.
 
 ## Topic 34: Model diagnostics and sensitivity analysis
 
-**Module:** `24_diagnostics_and_reproducibility`
+**Module:** `core/34_diagnostics_and_reproducibility`
 
 ### The question
 
@@ -4677,7 +4722,7 @@ is at its nominal level.
 
 ## Topic 35: Reproducible statistical workflows
 
-**Module:** `24_diagnostics_and_reproducibility`
+**Module:** `core/00_setup_and_environment`, `core/34_diagnostics_and_reproducibility`
 
 ### The question
 
@@ -4759,7 +4804,7 @@ or run a competitive gene-set test - all of which need the complete vector
 
 ## Topic 36: Multiple testing beyond Benjamini-Hochberg
 
-**Module:** `25_modern_multiple_testing`
+**Module:** `core/36_modern_multiple_testing`
 
 ### The question
 
@@ -4834,7 +4879,7 @@ e-values (36.3) to fix this.[^knock]
 
 ## Topic 37: Measurement error, attenuation, and regression to the mean
 
-**Module:** `26_measurement_error_and_regression`
+**Module:** `core/37_measurement_error_and_regression`
 
 ### The question
 
@@ -4896,7 +4941,7 @@ $\rho$ is small, which is exactly when the assay is noisy.
 
 ## Topic 38: Meta-analysis and evidence synthesis
 
-**Module:** `27_meta_analysis`
+**Module:** `core/38_meta_analysis`
 
 ### The question
 
@@ -4957,7 +5002,7 @@ direction and no interval, and a single strong study can carry it.
 
 ## Topic 39: Conformal prediction and distribution-free uncertainty
 
-**Module:** `28_conformal_prediction`
+**Module:** `core/39_conformal_prediction`
 
 ### The question
 
@@ -5019,7 +5064,7 @@ grouping problem as Topic 1, and conformal prediction does not solve it.
 
 ## Topic 40: Designing a simulation study
 
-**Module:** `29_simulation_and_benchmarking`
+**Module:** `core/40_simulation_and_benchmarking`
 
 ### The question
 
@@ -5070,7 +5115,7 @@ MCSE of a difference. Always compare paired.
 
 ## Topic 41: Trajectory inference and pseudotime
 
-**Module:** `41_trajectory_and_pseudotime`
+**Module:** `bioinformatics/41_trajectory_and_pseudotime`
 
 ### The question
 
@@ -5131,7 +5176,7 @@ velocity as a hypothesis generator.
 
 ## Topic 42: Deconvolution, integration, and zero-inflation
 
-**Module:** `42_deconvolution_and_integration`
+**Module:** `bioinformatics/42_deconvolution_and_integration`
 
 ### The question
 
@@ -5212,7 +5257,7 @@ ligands dominate. False-positive rates in benchmarks are high.
 
 ## Topic 43: Fine-mapping, colocalisation, and heritability
 
-**Module:** `43_advanced_statistical_genetics`
+**Module:** `bioinformatics/43_advanced_statistical_genetics`
 
 ### The question
 
@@ -5290,7 +5335,7 @@ from discovery data over-fit.
 
 ## Topic 44: Power and design for omics experiments
 
-**Module:** `44_power_and_design_for_omics`
+**Module:** `bioinformatics/44_power_and_design_for_omics`
 
 ### The question
 
@@ -5340,7 +5385,7 @@ design optimal for one can be poor for another.
 
 ## Topic 45: Longitudinal and time-varying causal inference
 
-**Module:** `45_longitudinal_causal`
+**Module:** `bioinformatics/45_longitudinal_causal`
 
 ### The question
 
@@ -5396,7 +5441,7 @@ with absorbing states and no recovery.
 
 ## Topic 46: Model interpretation and pretrained models
 
-**Module:** `46_interpretation_and_foundation_models`
+**Module:** `bioinformatics/46_interpretation_and_foundation_models`
 
 ### The question
 

@@ -245,6 +245,6 @@ cat("\nFigure written to", file.path(OUT, "qc_panel.png"), "\n")
    HYPOTHESIS. Choosing the hypothesis after seeing the outcome is HARKing.
 2. Never delete an outlier without a documented, outcome-independent reason.
 3. Any preprocessing that uses the outcome must be abandoned or moved inside
-   the resampling loop (Module 21).
+   the resampling loop (Module 31).
 
 **Next:** `04_probability_and_sampling.R`

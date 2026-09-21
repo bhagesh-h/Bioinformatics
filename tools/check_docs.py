@@ -79,8 +79,54 @@ def check_site():
     return []
 
 
+def check_crossref():
+    """stats.md and README tables must match tools/build_crossref.py output."""
+    paths = [os.path.join(ROOT, p) for p in ("stats.md", "README.md")]
+    before = {p: open(p, encoding="utf-8").read() for p in paths}
+    subprocess.run([sys.executable, os.path.join(ROOT, "tools/build_crossref.py")],
+                   check=True, capture_output=True)
+    stale = [os.path.basename(p) for p in paths
+             if open(p, encoding="utf-8").read() != before[p]]
+    if stale:
+        return [f"{n}: cross-reference tables are stale, run "
+                f"python3 tools/build_crossref.py" for n in stale]
+    return []
+
+
+def check_module_numbering():
+    """A module's number must equal the stats.md topic it declares."""
+    problems = []
+    for sub in ("core", "bioinformatics"):
+        d = os.path.join(ROOT, "statsPy", sub)
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".py"):
+                continue
+            stem = fn[:-3]
+            mid = stem.split("_")[0]
+            if mid in ("00",):                      # setup has no topic
+                continue
+            txt = open(os.path.join(d, fn), encoding="utf-8").read()
+            m = re.search(r"Curriculum link:\*{0,2}\s*`?stats\.md`?\s*->\s*(.+)",
+                          txt)
+            if not m:
+                problems.append(f"{sub}/{fn}: no Curriculum link")
+                continue
+            head = re.sub(r"\(\d+\.\d+\)", "", m.group(1).split("equation")[0])
+            topics = re.findall(r"\b(\d+)\b", head)
+            if str(int(mid.rstrip("ab"))) not in topics:
+                problems.append(
+                    f"{sub}/{fn}: numbered {mid} but declares Topic(s) "
+                    f"{', '.join(topics) or '?'}")
+            r = os.path.join(ROOT, "statsR", sub, stem + ".R")
+            if not os.path.exists(r):
+                problems.append(f"statsR/{sub}/{stem}.R: missing R counterpart")
+    return problems
+
+
 for name, fn in [("python compiles", check_python),
                  ("markdown links", check_markdown),
+                 ("module numbering", check_module_numbering),
+                 ("cross-reference tables", check_crossref),
                  ("site in sync", check_site)]:
     problems = fn()
     print(f"{'ok  ' if not problems else 'FAIL'}  {name}"

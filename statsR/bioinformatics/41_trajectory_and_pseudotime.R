@@ -4,7 +4,7 @@
 #' ---
 #'
 #' **Curriculum link:** `stats.md` -> Topic 41, equations (41.1)-(41.3)
-#' **Core modules used:** 17, 18, 11, 31
+#' **Core modules used:** 17, 18, 11, 21
 #'
 #' ## Dataset card
 #'
@@ -256,7 +256,7 @@ cat("\n  The global ordering is essentially fixed (Spearman SD 0.000), yet indiv
 
   Almost no published analysis propagates any of this into the gene-level
   p-values, which are computed as though pseudotime were measured without
-  error. That is a measurement-error problem (Module 26), and it biases the
+  error. That is a measurement-error problem (Module 37), and it biases the
   estimated shapes toward flatness.\n")
 
 #' ## 7. RNA velocity, eq. (41.3)
@@ -381,7 +381,7 @@ cat("\nFigure written to", file.path(OUT, "trajectory.png"), "\n")
 # ## mean, its dispersion, its zeros. What it destroys is the COORDINATION
 # ## between genes, which is the only thing a trajectory can be made of. That
 # ## is what makes it the right null here, and it is the same reasoning used
-# ## for gene-set tests in Module 39.
+# ## for gene-set tests in Module 29.
 
 #' ### Problem 3: Pseudotime is not time
 #'

@@ -355,7 +355,7 @@ print(f"\nFigure written to {OUT}/linear_models.png")
 # ## Decision rules (from `stats.md` Topic 11)
 #
 # 1. Write the design matrix and check its rank first.
-# 2. Choose covariates from a causal diagram (Module 22), **not** from stepwise
+# 2. Choose covariates from a causal diagram (Module 32), **not** from stepwise
 #    selection, which invalidates all subsequent p-values.
 # 3. Centre continuous predictors involved in interactions: $\beta_1$ is the
 #    effect "when $x_2=0$", which may be outside the data.

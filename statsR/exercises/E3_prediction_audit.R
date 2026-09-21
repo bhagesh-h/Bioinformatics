@@ -4,7 +4,7 @@
 #' ---
 #'
 #' **Curriculum link:** `stats.md` -> Topics 18, 21, 31
-#' **Core modules used:** 18, 21, 31, 38
+#' **Core modules used:** 18, 31, 21, 28b
 #'
 #' ## The brief
 #'
@@ -223,14 +223,14 @@ make_folds <- function(y, k, groups = NULL, seed = 1) {
 # ## finding is real and you did not need the check - and it is devastating
 # ## when the finding is not real and the check is the only thing that would
 # ## have told you. Q5 measures exactly that case, and the same asymmetry
-# ## appears in Module 38 (section 6b), where a selection leak worth +0.09
+# ## appears in Module 28b (section 6b), where a selection leak worth +0.09
 # ## C-index on null data is worth ~0.00 on data with real signal.
 # ##
 # ## So do not calibrate your concern from a table like this one. The
 # ## distinction that survives is about MECHANISM, not magnitude: leaks that
 # ## touch y (feature selection, grouped patients) can be catastrophic, while
 # ## leaks that touch only X (scaling, imputation) are usually mild - cf.
-# ## Module 40, where unsupervised factors barely leaked at all.
+# ## Module 30, where unsupervised factors barely leaked at all.
 
 #' ### Q3: The missing baseline
 

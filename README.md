@@ -46,7 +46,7 @@ each other. Open it locally, or publish it with GitHub Pages
 | `statsPy/bioinformatics/`, `statsR/bioinformatics/` | 17 modules each | Applied analyses: RNA-seq, single-cell, methylation, GWAS, proteomics, microbiome, spatial, survival, enrichment, networks, trajectories, deconvolution, statistical genetics, omics design, longitudinal causal inference, interpretability |
 | `statsPy/exercises/`, `statsR/exercises/` | 4 exercises each | Integrative problem sets combining several topics, with full worked solutions |
 | `statsPy/notebooks/`, `statsR/notebooks/` | 57 each | Generated `.ipynb` / `.Rmd` views of every script |
-| `tools/` | 8 scripts | Test runners, solution checker, notebook builder, site builder, fast doc checks, public-dataset fetcher (`fetch_data.py`, see [`data/README.md`](data/README.md)) |
+| `tools/` | 9 scripts | Test runners, solution checker, notebook builder, site builder, cross-reference generator, fast doc checks, public-dataset fetcher (`fetch_data.py`, see [`data/README.md`](data/README.md)) |
 | `docs/` | 1 page | A single-page map of all 57 modules and their dependencies, for GitHub Pages |
 | `env/`, `docker/` | - | Pinned environment manifests and Dockerfiles |
 
@@ -119,16 +119,16 @@ runr  statsR/core/08_multiple_testing.R
 |
 +-- statsPy/                       -- PYTHON TRACK --------------------------
 |   +-- foundations/               6 beginner modules       (F1 ... F6)
-|   +-- core/                      30 statistics modules    (00 ... 29)
-|   +-- bioinformatics/            17 applied modules       (30 ... 46)
+|   +-- core/                      30 statistics modules    (00-19, 28a, 31-40)
+|   +-- bioinformatics/            17 applied modules       (20-30, 41-46)
 |   +-- exercises/                 4 integrative problem sets (E1 ... E4)
 |   \-- notebooks/                 generated .ipynb, mirroring the above
 |       +-- foundations/  core/  bioinformatics/  exercises/
 |
 +-- statsR/                        -- R TRACK -------------------------------
 |   +-- foundations/               6 beginner modules       (F1 ... F6)
-|   +-- core/                      30 statistics modules    (00 ... 29)
-|   +-- bioinformatics/            17 applied modules       (30 ... 46)
+|   +-- core/                      30 statistics modules    (00-19, 28a, 31-40)
+|   +-- bioinformatics/            17 applied modules       (20-30, 41-46)
 |   +-- exercises/                 4 integrative problem sets (E1 ... E4)
 |   \-- notebooks/                 generated .Rmd, mirroring the above
 |       +-- foundations/  core/  bioinformatics/  exercises/
@@ -167,12 +167,21 @@ runr  statsR/core/08_multiple_testing.R
 | Pattern | Meaning |
 |---|---|
 | `F1`-`F6` | foundations - statistics from zero, no prerequisites |
-| `00`-`29` | core statistics, in teaching order - later modules assume earlier ones |
-| `30`-`46` | applied bioinformatics, each mapping to one assay or question |
+| a number | **the `stats.md` topic number**, whether the module lives in `core/` or `bioinformatics/` |
+| `28a` / `28b` | Topic 28 needs two modules: `28a` core machinery, `28b` applied |
+| `34` | the one module covering two topics, 34 and 35 |
+| `00` | setup and house rules; no topic of its own |
 | `E1`-`E4` | integrative exercises that combine several modules |
 
-The gap between 29 and 30 is deliberate: it leaves room for further core
-modules without renumbering the applied ones.
+**A module's number is its topic number.** Topic 24 is
+`bioinformatics/24_gwas_association`; Topic 36 is
+`core/36_modern_multiple_testing`. You never need a lookup table to go from
+the document to the code, or back.
+
+The cost of that choice is that **the number is not the reading order**. The
+applied modules are numbered 20-30 because that is where their topics sit, but
+they are read after the core track. The order is in
+[§6](#6-how-to-learn-from-this).
 
 
 ## 5. The four kinds of file
@@ -252,16 +261,21 @@ same ideas, verified by simulation, before the biology is layered on.
 
 ### Suggested order
 
-| Stage | Modules | Then do |
+Module numbers follow `stats.md`, so they are deliberately **not** in reading
+order. This is:
+
+<!-- BEGIN crossref:reading-order -->
+| Stage | Modules, in order | Exercise |
 |---|---|---|
-| **Absolute basics** | `F1`-`F6` | - |
-| Foundations | `00`-`09` | `E1` (design audit) |
-| Models | `10`-`15` | - |
-| High-dimensional | `16`-`19` | - |
-| Inference and validation | `20`-`24` | `E3` (prediction audit), `E4` (causal) |
-| Modern methods | `25`-`29` | - |
-| Applied | `30`-`40` | `E2` (RNA-seq end to end) |
-| Advanced applied | `41`-`46` | - |
+| Absolute basics | `F1` `F2` `F3` `F4` `F5` `F6` | - |
+| Foundations | `00` `01` `02` `03` `04` `05` `06` `07` `08` `09` | `E1` design audit |
+| Models | `10` `11` `12` `13` `14` `15` | - |
+| High-dimensional | `16` `17` `18` `19` | - |
+| Inference and validation | `28a` `31` `32` `33` `34` | `E3` prediction audit, `E4` causal question |
+| Modern core methods | `36` `37` `38` `39` `40` | - |
+| Applied assays | `20` `21` `22` `23` `24` `25` `26` `27` `28b` `29` `30` | `E2` RNA-seq end to end |
+| Advanced applied | `41` `42` `43` `44` `45` `46` | - |
+<!-- END crossref:reading-order -->
 
 If you are here for one assay, read `01`, `08`, `13` and `19` first - those
 four cover the mistakes that actually invalidate published analyses - then go
@@ -272,13 +286,13 @@ straight to your module in `bioinformatics/`.
 Run these six, in this order. They contain most of what goes wrong in practice:
 
 `01_study_design_and_estimands`, `08_multiple_testing`,
-`19_batch_effects`, `21_prediction_and_validation`,
-`22_causal_inference`, `30_bulk_rnaseq_differential_expression`
+`19_batch_effects`, `31_prediction_and_validation`,
+`32_causal_inference`, `20_bulk_rnaseq_differential_expression`
 
 
 ## 7. How to solve the problems
 
-Every foundations module (`F1`-`F6`), applied module (`30`-`40`) and
+Every foundations module (`F1`-`F6`), applied module (`20`-`30`, `41`-`46`) and
 exercise (`E1`-`E4`) ends with a
 `PROBLEMS` section - 142 problems in total across the two languages. Each
 problem has two blocks:
@@ -322,6 +336,18 @@ solutions are kept honest: code that is never run rots.
 
 ## 8. Module map
 
+**A module's number is its `stats.md` topic number.** Topic 24 is
+`bioinformatics/24_gwas_association`; Topic 36 is
+`core/36_modern_multiple_testing`. To go the other way, open the module and
+read its `Curriculum link` header. There is no lookup table to consult, and
+the three exceptions (`00`, `28a`/`28b`, `34`) are noted in the tables below.
+
+Because the numbers follow the document rather than the syllabus, they are
+**not** the reading order - see [§6](#6-how-to-learn-from-this). The full
+topic-to-module concordance lives in
+[`stats.md`](stats.md#module-map), generated by `tools/build_crossref.py` and
+checked in CI by `tools/check_docs.py`.
+
 ### Foundations: `statsPy/foundations/`, `statsR/foundations/`
 
 No prerequisites. Read alongside **Part 0** of `stats.md`.
@@ -337,60 +363,68 @@ No prerequisites. Read alongside **Part 0** of `stats.md`.
 
 ### Core: `statsPy/core/`, `statsR/core/`
 
-| # | Module | Topic in `stats.md` |
+| # | Module | Note |
 |---|---|---|
-| 00 | `setup_and_environment` | - |
-| 01 | `study_design_and_estimands` | 1 |
-| 02 | `data_structures_and_scales` | 2 |
-| 03 | `exploratory_data_analysis` | 3 |
-| 04 | `probability_and_sampling` | 4 |
-| 05 | `estimation_and_intervals` | 5 |
-| 06 | `hypothesis_tests_and_pvalues` | 6 |
-| 07 | `ttests_ranks_permutation` | 7 |
-| 08 | `multiple_testing` | 8 |
-| 09 | `power_and_sample_size` | 9 |
-| 10 | `correlation_and_dependence` | 10 |
-| 11 | `linear_models` | 11 |
-| 12 | `anova_and_contrasts` | 12 |
-| 13 | `generalized_linear_models` | 13 |
-| 14 | `mixed_models` | 14 |
-| 15 | `missing_data_and_censoring` | 15 |
-| 16 | `matrix_algebra` | 16 |
-| 17 | `pca` | 17 |
-| 18 | `distances_and_clustering` | 18 |
-| 19 | `batch_effects` | 19 |
-| 20 | `survival_and_longitudinal` | 28 |
-| 21 | `prediction_and_validation` | 31 |
-| 22 | `causal_inference` | 32 |
-| 23 | `bayesian_and_shrinkage` | 33 |
-| 24 | `diagnostics_and_reproducibility` | 34, 35 |
-| 25 | `modern_multiple_testing` | 36 |
-| 26 | `measurement_error_and_regression` | 37 |
-| 27 | `meta_analysis` | 38 |
-| 28 | `conformal_prediction` | 39 |
-| 29 | `simulation_and_benchmarking` | 40 |
+| `00` | `setup_and_environment` | setup and house rules; leans on Topic 35 |
+| `01` | `study_design_and_estimands` | - |
+| `02` | `data_structures_and_scales` | - |
+| `03` | `exploratory_data_analysis` | - |
+| `04` | `probability_and_sampling` | - |
+| `05` | `estimation_and_intervals` | - |
+| `06` | `hypothesis_tests_and_pvalues` | - |
+| `07` | `ttests_ranks_permutation` | - |
+| `08` | `multiple_testing` | - |
+| `09` | `power_and_sample_size` | - |
+| `10` | `correlation_and_dependence` | - |
+| `11` | `linear_models` | - |
+| `12` | `anova_and_contrasts` | - |
+| `13` | `generalized_linear_models` | - |
+| `14` | `mixed_models` | - |
+| `15` | `missing_data_and_censoring` | - |
+| `16` | `matrix_algebra` | - |
+| `17` | `pca` | - |
+| `18` | `distances_and_clustering` | - |
+| `19` | `batch_effects` | - |
+| `28a` | `survival_and_longitudinal` | Topic 28 part 1 - the machinery (`28b` applies it) |
+| `31` | `prediction_and_validation` | - |
+| `32` | `causal_inference` | - |
+| `33` | `bayesian_and_shrinkage` | - |
+| `34` | `diagnostics_and_reproducibility` | covers Topics 34 **and** 35 |
+| `36` | `modern_multiple_testing` | - |
+| `37` | `measurement_error_and_regression` | - |
+| `38` | `meta_analysis` | - |
+| `39` | `conformal_prediction` | - |
+| `40` | `simulation_and_benchmarking` | - |
+
+The number **is** the `stats.md` topic number, except for the three rows
+noted above. There is no separate topic column because there is nothing
+left for it to say.
 
 ### Applied: `statsPy/bioinformatics/`, `statsR/bioinformatics/`
 
-| # | Module | Topic | The central trap |
-|---|---|---|---|
-| 30 | `bulk_rnaseq_differential_expression` | 20 | dispersion cannot be estimated per gene at n = 3 |
-| 31 | `single_cell_pseudobulk` | 21 | cells are not replicates |
-| 32 | `cytometry_differential_abundance` | 22 | cell proportions are compositional |
-| 33 | `methylation_epigenomics` | 23 | beta values are heteroscedastic; use M-values |
-| 34 | `gwas_association` | 24 | population structure is confounding |
-| 35 | `proteomics_missing_values` | 25 | missingness depends on abundance (MNAR) |
-| 36 | `microbiome_compositional` | 26 | you only ever observe proportions |
-| 37 | `spatial_omics` | 27 | spots are not patients; space induces correlation |
-| 38 | `survival_biomarkers` | 28 | events, not patients; never dichotomise on a data-chosen cut-point |
-| 39 | `gene_set_enrichment` | 29 | genes in a pathway are correlated |
-| 40 | `networks_and_multiomics` | 30 | correlation networks find modules in pure noise |
-| 41 | `trajectory_and_pseudotime` | 41 | the pseudotime was computed from the genes you test against it |
-| 42 | `deconvolution_and_integration` | 42 | collinear cell types; over-correction; zero-inflation that is not there |
-| 43 | `advanced_statistical_genetics` | 43 | the lead SNP is usually not the causal one |
-| 44 | `power_and_design_for_omics` | 44 | the estimand decides the design, and the same budget gives different optima |
-| 45 | `longitudinal_causal` | 45 | one covariate is a confounder and a mediator at once |
-| 46 | `interpretation_and_foundation_models` | 46 | the top feature can be a pure batch proxy |
+| # | Module | The central trap |
+|---|---|---|
+| `20` | `bulk_rnaseq_differential_expression` | dispersion cannot be estimated per gene at n = 3 |
+| `21` | `single_cell_pseudobulk` | cells are not replicates |
+| `22` | `cytometry_differential_abundance` | cell proportions are compositional |
+| `23` | `methylation_epigenomics` | beta values are heteroscedastic; use M-values |
+| `24` | `gwas_association` | population structure is confounding |
+| `25` | `proteomics_missing_values` | missingness depends on abundance (MNAR) |
+| `26` | `microbiome_compositional` | you only ever observe proportions |
+| `27` | `spatial_omics` | spots are not patients; space induces correlation |
+| `28b` | `survival_biomarkers` | events, not patients; never dichotomise on a data-chosen cut-point |
+| `29` | `gene_set_enrichment` | genes in a pathway are correlated |
+| `30` | `networks_and_multiomics` | correlation networks find modules in pure noise |
+| `41` | `trajectory_and_pseudotime` | the pseudotime was computed from the genes you test against it |
+| `42` | `deconvolution_and_integration` | collinear cell types; over-correction; zero-inflation that is not there |
+| `43` | `advanced_statistical_genetics` | the lead SNP is usually not the causal one |
+| `44` | `power_and_design_for_omics` | the estimand decides the design, and the same budget gives different optima |
+| `45` | `longitudinal_causal` | one covariate is a confounder and a mediator at once |
+| `46` | `interpretation_and_foundation_models` | the top feature can be a pure batch proxy |
+
+Numbered 20-30 and 41-46 because those are their `stats.md` topics;
+they are read **after** the core track. `28b` is the applied half of
+Topic 28, whose core half is `28a`.
 
 ### Exercises: `statsPy/exercises/`, `statsR/exercises/`
 

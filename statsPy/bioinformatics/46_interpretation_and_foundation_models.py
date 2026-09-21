@@ -15,7 +15,7 @@
 # # Applied 46: Model interpretation and pretrained models
 #
 # **Curriculum link:** `stats.md` -> Topic 46, equations (46.1)-(46.3)
-# **Core modules used:** 19, 21, 28, 31
+# **Core modules used:** 19, 31, 39, 21
 #
 # ## The question
 #

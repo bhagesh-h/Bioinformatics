@@ -456,7 +456,7 @@ print(f"\nFigure written to {OUT}/batch_effects.png")
 # 3. If completely confounded, **stop and say so**.
 # 4. Adjust in the model (19.4) for inference; correct the matrix (19.2) only
 #    for visualisation/clustering/prediction: and keep the correction inside
-#    cross-validation folds (Module 21).
+#    cross-validation folds (Module 31).
 # 5. Always evaluate **both** batch removal and biology preservation.
 #
-# **Next:** `20_survival_and_longitudinal.py`
+# **Next:** `28a_survival_and_longitudinal.py`

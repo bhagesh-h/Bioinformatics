@@ -209,7 +209,7 @@ for (s2 in c(0.5, 1, 2, 4))
               s2, 1/sqrt(1 + 0.346*s2)))
 cat("\n  GEE estimates the MARGINAL effect; GLMM the CONDITIONAL one. Say which.\n")
 cat("  GEE's sandwich needs MANY clusters (J >= 40); with 6 donors it is\n")
-cat("  badly biased and a mixed model or aggregation is safer (Module 24).\n")
+cat("  badly biased and a mixed model or aggregation is safer (Module 34).\n")
 ```
 
 ## 8. Figure
